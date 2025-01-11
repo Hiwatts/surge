@@ -1,19 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_COMMON_SKINMODEL_H
+#define SURGE_SRC_COMMON_SKINMODEL_H
 #include <string>
 #include <iostream>
 #include <unordered_map>
@@ -102,7 +110,9 @@ enum NumberfieldControlModes
     NOTENAME,
     MIDICHANNEL_FROM_127,
     MSEG_SNAP_H,
-    MSEG_SNAP_V
+    MSEG_SNAP_V,
+    WTSE_RESOLUTION,
+    WTSE_FRAMES
 };
 }
 
@@ -129,7 +139,9 @@ struct Component
         COLUMNS,
         FRAMES,
         FRAME_OFFSET,
-        DRAGGABLE_HSWITCH,
+        DRAGGABLE_SWITCH,
+        MOUSEWHEELABLE_SWITCH,
+        ACCESSIBLE_AS_MOMENTARY_BUTTON,
 
         NUMBERFIELD_CONTROLMODE,
 
@@ -244,6 +256,7 @@ struct Connector
         JOG_FX,
         JOG_WAVESHAPE,
         ANALYZE_WAVESHAPE,
+        ANALYZE_FILTERS,
 
         SAVE_PATCH,
         SAVE_PATCH_DIALOG,
@@ -251,6 +264,9 @@ struct Connector
         STATUS_MPE,
         STATUS_TUNE,
         STATUS_ZOOM,
+
+        ACTION_UNDO,
+        ACTION_REDO,
 
         LFO_LABEL,
         FXPRESET_LABEL,
@@ -265,7 +281,11 @@ struct Connector
 
         LFO_MENU,
 
+        FILTER_ANALYSIS_WINDOW,
+        OSCILLOSCOPE_WINDOW,
+        WAVESHAPER_ANALYSIS_WINDOW,
         FORMULA_EDITOR_WINDOW,
+        WT_EDITOR_WINDOW,
         TUNING_EDITOR_WINDOW,
         MOD_LIST_WINDOW,
 
@@ -379,7 +399,7 @@ namespace Filter
 extern Surge::Skin::Connector balance, config, cutoff_1, cutoff_2, envmod_1, envmod_2,
     f2_link_resonance, f2_offset_mode, feedback, highpass, keytrack_1, keytrack_2, resonance_1,
     resonance_2, subtype_1, subtype_2, type_1, type_2, waveshaper_drive, waveshaper_type,
-    waveshaper_jog, waveshaper_analyze;
+    waveshaper_jog, waveshaper_analyze, filter_analyze;
 }
 namespace Global
 {
@@ -426,6 +446,7 @@ extern Surge::Skin::Connector surge_menu;
 extern Surge::Skin::Connector patch_category_jog, patch_jog, patch_save;
 
 extern Surge::Skin::Connector status_mpe, status_zoom, status_tune;
+extern Surge::Skin::Connector action_undo, action_redo;
 
 extern Surge::Skin::Connector vu_meter;
 
@@ -433,9 +454,11 @@ extern Surge::Skin::Connector vu_meter;
 
 extern Surge::Skin::Connector patch_browser;
 
-extern Surge::Skin::Connector mseg_editor, formula_editor, tuning_editor;
+extern Surge::Skin::Connector mseg_editor, formula_editor, wt_editor, tuning_editor;
 
 extern Surge::Skin::Connector mod_list;
+
+extern Surge::Skin::Connector filter_analysis, oscilloscope, ws_analysis;
 
 extern Surge::Skin::Connector save_patch_dialog;
 
@@ -447,3 +470,5 @@ extern Surge::Skin::Connector modulation_panel;
 } // namespace Skin
 
 } // namespace Surge
+
+#endif // SURGE_SRC_COMMON_SKINMODEL_H

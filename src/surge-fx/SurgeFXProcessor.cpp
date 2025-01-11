@@ -1,16 +1,37 @@
 /*
-  ==============================================================================
-
-    This file was auto-generated!
-
-    It contains the basic framework code for a JUCE plugin processor.
-
-  ==============================================================================
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SurgeFXProcessor.h"
+#include "FXOpenSoundControl.h"
 #include "SurgeFXEditor.h"
 #include "DebugHelpers.h"
+#include "UserDefaults.h"
+#include <fmt/core.h>
+
+#if LINUX
+// getCurrentPosition is deprecated in J7
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 
 //==============================================================================
 SurgefxAudioProcessor::SurgefxAudioProcessor()
@@ -19,48 +40,68 @@ SurgefxAudioProcessor::SurgefxAudioProcessor()
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)
                          .withInput("Sidechain", juce::AudioChannelSet::stereo(), true))
 {
+    auto cfg = SurgeStorage::SurgeStorageConfig::fromDataPath("");
+    cfg.createUserDirectory = false;
+    cfg.scanWavetableAndPatches = false;
+
+    storage.reset(new SurgeStorage(cfg));
+    storage->userDefaultsProvider->addOverride(Surge::Storage::HighPrecisionReadouts, false);
+
     nonLatentBlockMode = !juce::PluginHostType().isFruityLoops();
+    nonLatentBlockMode = Surge::Storage::getUserDefaultValue(
+        storage.get(), Surge::Storage::FXUnitAssumeFixedBlock, nonLatentBlockMode);
+
     setLatencySamples(nonLatentBlockMode ? 0 : BLOCK_SIZE);
 
     effectNum = fxt_off;
-    storage.reset(new SurgeStorage());
-    storage->userPrefOverrides[Surge::Storage::HighPrecisionReadouts] = std::make_pair(0, "");
 
     fxstorage = &(storage->getPatch().fx[0]);
     audio_thread_surge_effect.reset();
     resetFxType(effectNum, false);
     fxstorage->return_level.id = -1;
-    setupStorageRanges((Parameter *)fxstorage, &(fxstorage->p[n_fx_params - 1]));
+    setupStorageRanges(&(fxstorage->type), &(fxstorage->p[n_fx_params - 1]));
 
     for (int i = 0; i < n_fx_params; ++i)
     {
-        char lb[256], nm[256];
-        snprintf(lb, 256, "fx_parm_%d", i);
-        snprintf(nm, 256, "FX Parameter %d", i);
+        std::string lb, nm;
+        lb = fmt::format("fx_parm_{:d}", i);
+        nm = fmt::format("FX Parameter {:d}", i);
 
-        addParameter(fxParams[i] = new juce::AudioParameterFloat(
-                         lb, nm, juce::NormalisableRange<float>(0.0, 1.0),
+        addParameter(fxParams[i] = new float_param_t(
+                         juce::ParameterID(lb, 1), nm, juce::NormalisableRange<float>(0.0, 1.0),
                          fxstorage->p[fx_param_remap[i]].get_value_f01()));
+        fxParams[i]->getTextHandler = [this, i](float f, int len) -> juce::String {
+            return juce::String(getParamValueFor(i, f)).substring(0, len);
+        };
+        fxParams[i]->getTextToValue = [this, i](const juce::String &s) -> float {
+            return getParameterValueForString(i, s.toStdString());
+        };
         fxBaseParams[i] = fxParams[i];
     }
-    addParameter(fxType = new juce::AudioParameterInt("fxtype", "FX Type", fxt_delay,
-                                                      n_fx_types - 1, effectNum));
+
+    addParameter(fxType = new int_param_t(juce::ParameterID("fxtype", 1), "FX Type", fxt_delay,
+                                          n_fx_types - 1, effectNum));
+    fxType->getTextHandler = [this](float f, int len) -> juce::String {
+        auto i = 1 + (int)round(f * (n_fx_types - 2));
+        if (i >= 1 && i < n_fx_types)
+            return fx_type_names[i];
+        return "";
+    };
+
+    fxType->getTextToValue = [](const juce::String &s) -> float { return 0; };
     fxBaseParams[n_fx_params] = fxType;
 
     for (int i = 0; i < n_fx_params; ++i)
     {
-        char lb[256], nm[256];
-        snprintf(lb, 256, "fx_temposync_%d", i);
-        snprintf(nm, 256, "FX Temposync %d", i);
+        // FIXME - is this even used here?!
+        std::string lb, nm;
+        lb = fmt::format("fx_temposync_{:d}", i);
+        nm = fmt::format("Feature Param {:d}", i);
 
-        // if you change this 0xFF also change the divide in the setValueNotifyingHost in
-        // setFXParamExtended etc
-        addParameter(fxParamFeatures[i] = new juce::AudioParameterInt(lb, nm, 0, 0xFF, 0));
-        *(fxParamFeatures[i]) = paramFeatureFromParam(&(fxstorage->p[fx_param_remap[i]]));
-        fxBaseParams[i + n_fx_params + 1] = fxParamFeatures[i];
+        paramFeatures[i] = paramFeatureFromParam(&(fxstorage->p[fx_param_remap[i]]));
     }
 
-    for (int i = 0; i < 2 * n_fx_params + 1; ++i)
+    for (int i = 0; i < n_fx_params + 1; ++i)
     {
         fxBaseParams[i]->addListener(this);
         changedParams[i] = false;
@@ -74,6 +115,8 @@ SurgefxAudioProcessor::SurgefxAudioProcessor()
 
     paramChangeListener = []() {};
     resettingFx = false;
+
+    oscHandler.initOSC(this, storage);
 }
 
 SurgefxAudioProcessor::~SurgefxAudioProcessor() {}
@@ -103,6 +146,56 @@ const juce::String SurgefxAudioProcessor::getProgramName(int index) { return "De
 
 void SurgefxAudioProcessor::changeProgramName(int index, const juce::String &newName) {}
 
+void SurgefxAudioProcessor::tryLazyOscStartupFromStreamedState()
+{
+    if ((!oscHandler.listening && oscStartIn && oscPortIn > 0))
+    {
+        oscHandler.tryOSCStartup();
+    }
+    oscCheckStartup = false;
+}
+
+//==============================================================================
+/* OSC (Open Sound Control) */
+bool SurgefxAudioProcessor::initOSCIn(int port)
+{
+    if (port <= 0)
+    {
+        return false;
+    }
+
+    auto state = oscHandler.initOSCIn(port);
+
+    oscReceiving.store(state);
+    oscStartIn = true;
+
+    return state;
+}
+
+bool SurgefxAudioProcessor::changeOSCInPort(int new_port)
+{
+    oscReceiving.store(false);
+    oscHandler.stopListening();
+    return initOSCIn(new_port);
+}
+
+void SurgefxAudioProcessor::initOSCError(int port, std::string outIP)
+{
+    std::ostringstream msg;
+
+    msg << "Surge XT was unable to connect to OSC port " << port;
+    if (!outIP.empty())
+    {
+        msg << " at IP Address " << outIP;
+    }
+
+    msg << ".\n"
+        << "Either it is not a valid port, or it is already used by Surge XT or another "
+           "application.";
+
+    storage->reportError(msg.str(), "OSC Initialization Error");
+};
+
 //==============================================================================
 void SurgefxAudioProcessor::prepareToPlay(double sr, int samplesPerBlock)
 {
@@ -123,12 +216,21 @@ void SurgefxAudioProcessor::releaseResources()
     // spare memory, etc.
 }
 
+void SurgefxAudioProcessor::reset()
+{
+    if (surge_effect)
+    {
+        surge_effect->init();
+    }
+}
+
 bool SurgefxAudioProcessor::isBusesLayoutSupported(const BusesLayout &layouts) const
 {
     bool inputValid = layouts.getMainInputChannelSet() == juce::AudioChannelSet::mono() ||
                       layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo();
 
-    bool outputValid = layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+    bool outputValid = layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() ||
+                       layouts.getMainOutputChannelSet() == juce::AudioChannelSet::mono();
 
     bool sidechainValid = layouts.getChannelSet(true, 1).isDisabled() ||
                           layouts.getChannelSet(true, 1) == juce::AudioChannelSet::stereo();
@@ -141,8 +243,14 @@ bool SurgefxAudioProcessor::isBusesLayoutSupported(const BusesLayout &layouts) c
 void SurgefxAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                                          juce::MidiBuffer &midiMessages)
 {
+    audioRunning = true;
     if (resettingFx || !surge_effect)
         return;
+
+    if (oscCheckStartup)
+    {
+        tryLazyOscStartupFromStreamedState();
+    }
 
     juce::ScopedNoDenormals noDenormals;
 
@@ -168,6 +276,49 @@ void SurgefxAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
     {
         resetFxParams(true);
     }
+
+    auto sampl = buffer.getNumSamples();
+    if (nonLatentBlockMode && ((sampl & ~(BLOCK_SIZE - 1)) != sampl))
+    {
+        nonLatentBlockMode = false;
+        input_position = 0;
+        output_position = 0;
+        memset(output_buffer, 0, sizeof(output_buffer));
+        memset(input_buffer, 0, sizeof(input_buffer));
+        memset(sidechain_buffer, 0, sizeof(sidechain_buffer));
+
+        setLatencySamples(BLOCK_SIZE);
+        updateHostDisplay(ChangeDetails().withLatencyChanged(true));
+    }
+
+    auto mib = getBus(true, 0);
+    if (mib->isEnabled() && !(mib->getNumberOfChannels() == 1 || mib->getNumberOfChannels() == 2))
+    {
+        m_audioValid = false;
+        m_audioValidMessage = "Enabled Input is neither mono nor stereo";
+        return;
+    }
+    if (!mib->isEnabled())
+    {
+        m_audioValid = false;
+        m_audioValidMessage = "Input is not enabled";
+        return;
+    }
+    auto mob = getBus(false, 0);
+    if (mob->isEnabled() && (mob->getNumberOfChannels() != 2))
+    {
+        m_audioValid = false;
+        m_audioValidMessage =
+            "Enabled Output is not stereo " + std::to_string(mib->getNumberOfChannels());
+        return;
+    }
+    if (!mob->isEnabled())
+    {
+        m_audioValid = false;
+        m_audioValidMessage = "Output is not enabled";
+        return;
+    }
+    m_audioValid = true;
 
     auto mainInput = getBusBuffer(buffer, true, 0);
 
@@ -202,19 +353,27 @@ void SurgefxAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
             auto outL = mainOutput.getWritePointer(0, outPos);
             auto outR = mainOutput.getWritePointer(1, outPos);
 
-            if (effectNum == fxt_vocoder && sideChainBus && sideChainBus->isEnabled())
+            if ((effectNum == fxt_vocoder || effectNum == fxt_ringmod) && sideChainBus &&
+                sideChainBus->isEnabled())
             {
                 auto sideL = sideChainInput.getReadPointer(0, outPos);
                 auto sideR = sideChainInput.getReadPointer(1, outPos);
 
                 memcpy(storage->audio_in_nonOS[0], sideL, BLOCK_SIZE * sizeof(float));
                 memcpy(storage->audio_in_nonOS[1], sideR, BLOCK_SIZE * sizeof(float));
+
+                if (effectNum == fxt_ringmod)
+                {
+                    halfbandIN.process_block_U2(storage->audio_in_nonOS[0],
+                                                storage->audio_in_nonOS[1], storage->audio_in[0],
+                                                storage->audio_in[1], BLOCK_SIZE_OS);
+                }
             }
 
             for (int i = 0; i < n_fx_params; ++i)
             {
                 fxstorage->p[fx_param_remap[i]].set_value_f01(*fxParams[i]);
-                paramFeatureOntoParam(&(fxstorage->p[fx_param_remap[i]]), *(fxParamFeatures[i]));
+                paramFeatureOntoParam(&(fxstorage->p[fx_param_remap[i]]), paramFeatures[i]);
             }
             copyGlobaldataSubset(storage_id_start, storage_id_end);
 
@@ -281,8 +440,7 @@ void SurgefxAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                 for (int i = 0; i < n_fx_params; ++i)
                 {
                     fxstorage->p[fx_param_remap[i]].set_value_f01(*fxParams[i]);
-                    paramFeatureOntoParam(&(fxstorage->p[fx_param_remap[i]]),
-                                          *(fxParamFeatures[i]));
+                    paramFeatureOntoParam(&(fxstorage->p[fx_param_remap[i]]), paramFeatures[i]);
                 }
                 copyGlobaldataSubset(storage_id_start, storage_id_end);
 
@@ -319,6 +477,33 @@ void SurgefxAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
             outR[i] = std::clamp(outR[i], -2.f, 2.f);
         }
     }
+
+    if (oscReceiving.load())
+        processBlockOSC();
+}
+
+// Pull incoming OSC events from ring buffer
+void SurgefxAudioProcessor::processBlockOSC()
+{
+    while (true)
+    {
+        auto om = oscRingBuf.pop();
+        if (!om.has_value())
+            break;
+        switch (om->type)
+        {
+        case SurgefxAudioProcessor::FX_PARAM:
+        {
+            prepareParametersAbsentAudio();
+            setFXParamValue01(om->p_index, om->fval);
+            // this order does matter
+            changedParamsValue[om->p_index] = om->fval;
+            changedParams[om->p_index] = true;
+            triggerAsyncUpdate();
+        }
+        break;
+        }
+    }
 }
 
 //==============================================================================
@@ -336,19 +521,52 @@ juce::AudioProcessorEditor *SurgefxAudioProcessor::createEditor()
 void SurgefxAudioProcessor::getStateInformation(juce::MemoryBlock &destData)
 {
     std::unique_ptr<juce::XmlElement> xml(new juce::XmlElement("surgefx"));
-    xml->setAttribute("streamingVersion", (int)1);
+    xml->setAttribute("streamingVersion", (int)2);
+
     for (int i = 0; i < n_fx_params; ++i)
     {
-        char nm[256];
-        snprintf(nm, 256, "fxp_%d", i);
+        juce::String nm = fmt::format("fxp_{:d}", i);
         float val = *(fxParams[i]);
+
         xml->setAttribute(nm, val);
 
-        snprintf(nm, 256, "fxp_param_features_%d", i);
-        int pf = *(fxParamFeatures[i]);
+        auto &spar = fxstorage->p[fx_param_remap[i]];
+        nm = fmt::format("surgevaltype_{:d}", i);
+
+        xml->setAttribute(nm, spar.valtype);
+
+        nm = fmt::format("surgeval_{:d}", i);
+
+        switch (spar.valtype)
+        {
+        case vt_bool:
+            xml->setAttribute(nm, spar.val.b);
+            break;
+        case vt_int:
+            if (spar.ctrltype == ct_none)
+            {
+                xml->setAttribute(nm, 0);
+            }
+            else
+            {
+                xml->setAttribute(nm, spar.val.i);
+            }
+            break;
+        default:
+        case vt_float:
+            xml->setAttribute(nm, spar.val.f);
+            break;
+        }
+
+        nm = fmt::format("fxp_param_features_{:d}", i);
+
+        int pf = paramFeatureFromParam(&(fxstorage->p[fx_param_remap[i]]));
         xml->setAttribute(nm, pf);
     }
+
     xml->setAttribute("fxt", effectNum);
+    xml->setAttribute("oscpin", oscPortIn);
+    xml->setAttribute("oscin", oscStartIn);
 
     copyXmlToBinary(*xml, destData);
 }
@@ -356,36 +574,86 @@ void SurgefxAudioProcessor::getStateInformation(juce::MemoryBlock &destData)
 void SurgefxAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
+
     if (xmlState.get() != nullptr)
     {
+        int paramFeaturesCache[n_fx_params];
         if (xmlState->hasTagName("surgefx"))
         {
+            auto streamingVersion = xmlState->getIntAttribute("streamingVersion", (int)2);
+            if (streamingVersion > 2 || streamingVersion < 0)
+                streamingVersion = 1; // assume some corrupted ancient session
+
             effectNum = xmlState->getIntAttribute("fxt", fxt_delay);
             resetFxType(effectNum, false);
 
+            oscPortIn = xmlState->getIntAttribute("oscpin", 0);
+            oscStartIn = xmlState->getBoolAttribute("oscin", false);
+            // start OSC, if variables merit it
+            oscCheckStartup = true;
+
             for (int i = 0; i < n_fx_params; ++i)
             {
-                char nm[256];
-                snprintf(nm, 256, "fxp_%d", i);
-                float v = xmlState->getDoubleAttribute(nm, 0.0);
-                fxstorage->p[fx_param_remap[i]].set_value_f01(v);
+                std::string nm;
 
-                // Legacy unstream
-                snprintf(nm, 256, "fxp_temposync_%d", i);
+                if (streamingVersion == 1)
+                {
+                    nm = fmt::format("fxp_{:d}", i);
+                    float v = xmlState->getDoubleAttribute(nm, 0.0);
+                    fxstorage->p[fx_param_remap[i]].set_value_f01(v);
+                }
+                else if (streamingVersion == 2)
+                {
+                    auto &spar = fxstorage->p[fx_param_remap[i]];
+                    nm = fmt::format("fxp_{:d}", i);
+                    float v = xmlState->getDoubleAttribute(nm, 0.0);
+
+                    nm = fmt::format("surgevaltype_{:d}", i);
+                    int type = xmlState->getIntAttribute(nm, vt_float);
+
+                    nm = fmt::format("surgeval_{:d}", i);
+
+                    if (type == vt_int && xmlState->hasAttribute(nm))
+                    {
+                        // Unstream the int as an int. Bools and FLoats are
+                        // fine since they will 01 consistently and properly but
+                        // this means things like add an airwindow and we survive
+                        // going forward
+                        int ival = xmlState->getIntAttribute(nm, 0);
+                        spar.val.i = ival;
+                    }
+                    else
+                    {
+                        spar.set_value_f01(v);
+                    }
+                }
+
+                // Legacy unstream temposync
+                nm = fmt::format("fxp_temposync_{:d}", i);
+
                 if (xmlState->hasAttribute(nm))
                 {
                     bool b = xmlState->getBoolAttribute(nm, false);
                     fxstorage->p[fx_param_remap[i]].temposync = b;
                 }
 
-                // Modern unstream
-                snprintf(nm, 256, "fxp_param_features_%d", i);
+                // Modern unstream parameters
+                nm = fmt::format("fxp_param_features_{:d}", i);
+
                 if (xmlState->hasAttribute(nm))
                 {
                     int pf = xmlState->getIntAttribute(nm, 0);
-                    paramFeatureOntoParam(&(fxstorage->p[fx_param_remap[i]]), pf);
+                    paramFeaturesCache[i] = pf;
                 }
             }
+
+            resetFxParams(true);
+
+            for (int i = 0; i < n_fx_params; ++i)
+            {
+                paramFeatureOntoParam(&(fxstorage->p[fx_param_remap[i]]), paramFeaturesCache[i]);
+            }
+
             updateJuceParamsFromStorage();
         }
     }
@@ -492,6 +760,7 @@ void SurgefxAudioProcessor::resetFxParams(bool updateJuceParams)
         updateJuceParamsFromStorage();
     }
 
+    updateHostDisplay();
     resettingFx = false;
 }
 
@@ -501,8 +770,8 @@ void SurgefxAudioProcessor::updateJuceParamsFromStorage()
     for (int i = 0; i < n_fx_params; ++i)
     {
         *(fxParams[i]) = fxstorage->p[fx_param_remap[i]].get_value_f01();
-        int32_t switchVal = paramFeatureFromParam(&(fxstorage->p[fx_param_remap[i]]));
-        *(fxParamFeatures[i]) = switchVal;
+        fxParams[i]->mutableName = getParamGroup(i) + " " + getParamName(i);
+        paramFeatures[i] = paramFeatureFromParam(&(fxstorage->p[fx_param_remap[i]]));
     }
     *(fxType) = effectNum;
 
@@ -515,6 +784,43 @@ void SurgefxAudioProcessor::updateJuceParamsFromStorage()
     changedParams[n_fx_params] = true;
 
     triggerAsyncUpdate();
+}
+
+float SurgefxAudioProcessor::getParameterValueForString(int i, const std::string &s)
+{
+    if (!canSetParameterByString(i))
+        return 0;
+
+    auto *p = &(fxstorage->p[fx_param_remap[i]]);
+
+    pdata v;
+    // TODO: range error reporting
+    std::string errMsg;
+    auto res = p->set_value_from_string_onto(s, v, errMsg);
+    if (res)
+    {
+        return p->value_to_normalized(v.f);
+    }
+    else
+    {
+        return 0;
+    }
+}
+void SurgefxAudioProcessor::setParameterByString(int i, const std::string &s)
+{
+    auto *p = &(fxstorage->p[fx_param_remap[i]]);
+    // TODO: range error reporting
+    std::string errMsg;
+    p->set_value_from_string(s, errMsg);
+    *(fxParams[i]) = fxstorage->p[fx_param_remap[i]].get_value_f01();
+    changedParamsValue[i] = fxstorage->p[fx_param_remap[i]].get_value_f01();
+    triggerAsyncUpdate();
+}
+
+bool SurgefxAudioProcessor::canSetParameterByString(int i)
+{
+    auto *p = &(fxstorage->p[fx_param_remap[i]]);
+    return p->can_setvalue_from_string();
 }
 
 void SurgefxAudioProcessor::copyGlobaldataSubset(int start, int end)
@@ -545,6 +851,23 @@ void SurgefxAudioProcessor::setupStorageRanges(Parameter *start, Parameter *endI
     storage_id_end = max_id + 1;
 }
 
+void SurgefxAudioProcessor::prepareParametersAbsentAudio()
+{
+    if (!audioRunning)
+    {
+        if (getEffectType() == fxt_airwindows)
+        {
+            /*
+             * Airwindows needs to set up its internal state with a process
+             * See #6897
+             */
+            float dL alignas(16)[BLOCK_SIZE], dR alignas(16)[BLOCK_SIZE];
+            memset(dL, 0, sizeof(dL));
+            memset(dR, 0, sizeof(dR));
+            surge_effect->process_ringout(dL, dR);
+        }
+    }
+}
 //==============================================================================
 // This creates new instances of the plugin..
 juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter() { return new SurgefxAudioProcessor(); }

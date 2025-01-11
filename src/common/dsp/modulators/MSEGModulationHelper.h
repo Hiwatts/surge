@@ -1,4 +1,26 @@
-#pragma once
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+#ifndef SURGE_SRC_COMMON_DSP_MODULATORS_MSEGMODULATIONHELPER_H
+#define SURGE_SRC_COMMON_DSP_MODULATORS_MSEGMODULATIONHELPER_H
 #include <vector>
 #include "SurgeStorage.h"
 #include <random>
@@ -20,7 +42,7 @@ struct EvaluatorState
     int lastEval = -1;
     float lastOutput = 0;
     // 6 is NOT the number of LFOs, but number of MSEG state elements!
-    // TODO replace 6 with a constexpr!
+    // TODO: replace 6 with a constexpr!
     float msegState[6] = {0};
     bool released = false, retrigger_FEG = false, retrigger_AEG = false, has_triggered = false;
     enum LoopState
@@ -63,6 +85,7 @@ void adjustDurationConstantTotalDuration(MSEGStorage *ms, int idx, float dx, flo
 void resetControlPoint(MSEGStorage *ms, float t);
 void resetControlPoint(MSEGStorage *ms, int idx);
 void constrainControlPointAt(MSEGStorage *ms, int idx);
+void forceToConstrainedNormalForm(MSEGStorage *ms); // removes any nans etc
 
 void scaleDurations(MSEGStorage *ms, float factor, float maxDuration = -1);
 void scaleValues(MSEGStorage *ms, float factor);
@@ -82,3 +105,5 @@ void setLoopStart(MSEGStorage *ms, int seg);
 void setLoopEnd(MSEGStorage *ms, int seg);
 } // namespace MSEG
 } // namespace Surge
+
+#endif // SURGE_SRC_COMMON_DSP_MODULATORS_MSEGMODULATIONHELPER_H

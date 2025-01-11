@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "ModulationSourceButton.h"
 #include "RuntimeFont.h"
@@ -23,12 +30,14 @@
 #include "SurgeGUIUtils.h"
 #include "SurgeJUCEHelpers.h"
 #include "AccessibleHelpers.h"
+#include "widgets/MenuCustomComponents.h"
 
 namespace Surge
 {
 namespace Widgets
 {
 ModulationSourceButton::ModulationSourceButton()
+    : juce::Component(), WidgetBaseMixin<ModulationSourceButton>(this)
 {
     setDescription("Modulator");
     setAccessible(true);
@@ -40,6 +49,11 @@ ModulationSourceButton::ModulationSourceButton()
         mouseMode = CLICK_SELECT_ONLY;
         notifyValueChanged();
     };
+    ol->onReturnKey = [this](auto *t) {
+        mouseMode = CLICK_SELECT_ONLY;
+        notifyValueChanged();
+        return true;
+    };
     addChildComponent(*ol);
     selectAccButton = std::move(ol);
 
@@ -48,6 +62,11 @@ ModulationSourceButton::ModulationSourceButton()
     ol->onPress = [this](auto *t) {
         mouseMode = CLICK_TOGGLE_ARM;
         notifyValueChanged();
+    };
+    ol->onReturnKey = [this](auto *t) {
+        mouseMode = CLICK_TOGGLE_ARM;
+        notifyValueChanged();
+        return true;
     };
     addChildComponent(*ol);
     toggleArmAccButton = std::move(ol);
@@ -58,8 +77,69 @@ ModulationSourceButton::ModulationSourceButton()
         mouseMode = CLICK_ARROW;
         notifyValueChanged();
     };
+    ol->onReturnKey = [this](auto *t) {
+        mouseMode = CLICK_ARROW;
+        notifyValueChanged();
+        return true;
+    };
     addChildComponent(*ol);
     targetAccButton = std::move(ol);
+
+    auto os =
+        std::make_unique<OverlayAsAccessibleSlider<ModulationSourceButton>>(this, "macro value");
+    os->onGetValue = [this](auto *t) { return value; };
+    os->onValueToString = [this](auto *t, float f) {
+        auto v = f;
+        if (isBipolar)
+            v = v * 2 - 1;
+        return fmt::format("{:.3f}", v);
+    };
+    os->onSetValue = [this](auto *t, float f) {
+        value = limit01(f);
+        mouseMode = DRAG_VALUE;
+
+        notifyBeginEdit();
+        notifyValueChanged();
+        notifyEndEdit();
+        repaint();
+        if (auto h = t->getAccessibilityHandler())
+            h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+    };
+    os->onMinMaxDef = [this](auto *t, int mmd) {
+        if (mmd == 1)
+            value = 1;
+        if (mmd == -1)
+            value = 0;
+        if (mmd == 0)
+            value = (isBipolar ? 0.5 : 0);
+
+        mouseMode = DRAG_VALUE;
+
+        notifyBeginEdit();
+        notifyValueChanged();
+        notifyEndEdit();
+        repaint();
+        if (auto h = t->getAccessibilityHandler())
+            h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+    };
+    os->onJogValue = [this](auto *t, int dir, bool isShift, bool isControl) {
+        auto delt = 0.05f;
+        if (isShift)
+            delt = delt * 0.1;
+        if (dir < 0)
+            delt *= -1;
+        value = limit01(value + delt);
+        mouseMode = DRAG_VALUE;
+
+        notifyBeginEdit();
+        notifyValueChanged();
+        notifyEndEdit();
+        repaint();
+        if (auto h = t->getAccessibilityHandler())
+            h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+    };
+    addChildComponent(*os);
+    macroSlider = std::move(os);
 }
 void ModulationSourceButton::paint(juce::Graphics &g)
 {
@@ -166,13 +246,11 @@ void ModulationSourceButton::paint(juce::Graphics &g)
     g.setColour(FillCol);
     g.fillRect(fillRect);
 
-    auto btnFont = Surge::GUI::getFontManager()->getLatoAtSize(8, juce::Font::bold);
-
     if (!isMeta)
     {
         // modbutton name settings
         g.setColour(FontCol);
-        g.setFont(btnFont);
+        g.setFont(font);
 
         // modbutton name
         g.drawText(getCurrentModLabel(), getLocalBounds(), juce::Justification::centred);
@@ -187,7 +265,7 @@ void ModulationSourceButton::paint(juce::Graphics &g)
         auto topRect = getLocalBounds().withHeight(splitHeight);
 
         g.setColour(FontCol);
-        g.setFont(btnFont);
+        g.setFont(font);
         g.drawText(getCurrentModLabel(), topRect, juce::Justification::centred);
 
         // macro slider area
@@ -207,7 +285,7 @@ void ModulationSourceButton::paint(juce::Graphics &g)
         g.fillRect(valRect);
 
         // macro slider frame
-        g.setColour(skin->getColor(Colors::ModSource::Used::Background));
+        g.setColour(skin->getColor(Colors::ModSource::Macro::Border));
         g.drawRect(bottomRect);
 
         if (isBipolar)
@@ -305,11 +383,15 @@ void ModulationSourceButton::buildHamburgerMenu(juce::PopupMenu &menu,
         if (hu != "")
         {
             auto lurl = sge->fullyResolvedHelpURL(hu);
-            sge->addHelpHeaderTo(sge->modulatorName(modsource, false), lurl, menu);
+            sge->addHelpHeaderTo(
+                ModulatorName::modulatorName(storage, modsource, false, sge->current_scene), lurl,
+                menu);
         }
         else
         {
-            menu.addItem(sge->modulatorName(modsource, false), []() {});
+            menu.addItem(
+                ModulatorName::modulatorName(storage, modsource, false, sge->current_scene),
+                []() {});
         }
 
         menu.addSeparator();
@@ -335,14 +417,60 @@ void ModulationSourceButton::buildHamburgerMenu(juce::PopupMenu &menu,
 
             idx++;
         }
+
+        if (modsource >= ms_lfo1 && modsource <= ms_slfo6)
+        {
+            auto &lf =
+                sge->getStorage()->getPatch().scene[sge->current_scene].lfo[modsource - ms_lfo1];
+
+            auto sh = lf.shape.val.i;
+            if (sh != lt_formula)
+            {
+                menu.addSeparator();
+                bool sc = lf.lfoExtraAmplitude == LFOStorage::SCALED;
+                menu.addItem(Surge::GUI::toOSCase("Amplitude Parameter Applies to ") +
+                                 Surge::GUI::toOSCase("Raw and EG Outputs"),
+                             true, sc, [sge, modsource] {
+                                 auto &lf = sge->getStorage()
+                                                ->getPatch()
+                                                .scene[sge->current_scene]
+                                                .lfo[modsource - ms_lfo1];
+
+                                 if (lf.lfoExtraAmplitude == LFOStorage::SCALED)
+                                     lf.lfoExtraAmplitude = LFOStorage::UNSCALED;
+                                 else
+                                     lf.lfoExtraAmplitude = LFOStorage::SCALED;
+
+                                 sge->forceLFODisplayRebuild();
+                             });
+            }
+        }
     }
 }
 
 void ModulationSourceButton::mouseDown(const juce::MouseEvent &event)
 {
+    if (forwardedMainFrameMouseDowns(event))
+    {
+        return;
+    }
+
     mouseMode = CLICK;
     everDragged = false;
     mouseDownLocation = event.position;
+
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+    if (sge && sge->getSelectedModsource() != this->getCurrentModSource())
+    {
+        newlySelected = 2;
+    }
+    else
+    {
+        if (newlySelected > 0)
+            newlySelected--;
+    }
+
+    mouseDownLongHold(event);
 
     if (needsHamburger() && hamburgerHome.contains(event.position.toInt()))
     {
@@ -352,7 +480,8 @@ void ModulationSourceButton::mouseDown(const juce::MouseEvent &event)
 
         mouseMode = HAMBURGER;
 
-        menu.showMenuAsync(juce::PopupMenu::Options(), Surge::GUI::makeEndHoverCallback(this));
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+        menu.showMenuAsync(sge->popupMenuOptions(this), Surge::GUI::makeEndHoverCallback(this));
         return;
     }
 
@@ -373,6 +502,7 @@ void ModulationSourceButton::mouseDown(const juce::MouseEvent &event)
 
         if (bottomRect.contains(event.position.toInt()))
         {
+            notifyBeginEdit();
             mouseMode = PREDRAG_VALUE;
             return;
         }
@@ -404,13 +534,12 @@ void ModulationSourceButton::mouseDoubleClick(const juce::MouseEvent &event)
         auto topRect = getLocalBounds().withHeight(splitHeight);
 
         // rename macro on double-click
-        if (topRect.contains(event.position.toInt()))
+        if (topRect.contains(event.position.toInt()) && !newlySelected)
         {
             auto ccid = (int)getCurrentModSource() - ms_ctrl1;
             auto sge = firstListenerOfType<SurgeGUIEditor>();
 
-            // See #5774 for wy this is commented out
-            // sge->openMacroRenameDialog(ccid, topRect.getTopLeft(), this);
+            sge->openMacroRenameDialog(ccid, topRect.getTopLeft(), this);
 
             return;
         }
@@ -439,13 +568,13 @@ void ModulationSourceButton::mouseDoubleClick(const juce::MouseEvent &event)
         auto rect = getLocalBounds();
 
         // rename LFO on double-click
-        if (isLFO() && rect.contains(event.position.toInt()))
+        if (isLFO() && rect.contains(event.position.toInt()) && !newlySelected)
         {
             int lfo_id = getCurrentModSource() - ms_lfo1;
             auto sge = firstListenerOfType<SurgeGUIEditor>();
 
-            // See #5774 for wy this is commented out
-            // sge->openLFORenameDialog(lfo_id, rect.getTopLeft(), this);
+            // See #5774 for why this is commented out
+            sge->openLFORenameDialog(lfo_id, rect.getTopLeft(), this);
 
             return;
         }
@@ -468,6 +597,9 @@ void ModulationSourceButton::startHover(const juce::Point<float> &f)
 
 void ModulationSourceButton::endHover()
 {
+    if (stuckHover)
+        return;
+
     bool oh = isHovered;
     isHovered = false;
 
@@ -524,6 +656,8 @@ void ModulationSourceButton::onSkinChanged()
 
 void ModulationSourceButton::mouseUp(const juce::MouseEvent &event)
 {
+    mouseUpLongHold(event);
+
     setMouseCursor(juce::MouseCursor::NormalCursor);
 
     transientArmed = false;
@@ -567,6 +701,11 @@ void ModulationSourceButton::mouseUp(const juce::MouseEvent &event)
         notifyEndEdit();
     }
 
+    if (mouseMode == PREDRAG_VALUE)
+    {
+        notifyEndEdit();
+    }
+
     mouseMode = NONE;
 
     return;
@@ -582,7 +721,11 @@ void ModulationSourceButton::mouseDrag(const juce::MouseEvent &event)
     auto distance = event.position.getX() - mouseDownLocation.getX();
 
     if (mouseMode == PREDRAG_VALUE && distance == 0)
+    {
         return;
+    }
+
+    mouseDragLongHold(event);
 
     if (mouseMode == PREDRAG_VALUE)
     {
@@ -590,7 +733,7 @@ void ModulationSourceButton::mouseDrag(const juce::MouseEvent &event)
         {
             juce::Desktop::getInstance().getMainMouseSource().enableUnboundedMouseMovement(true);
         }
-        notifyBeginEdit();
+        // notifyBeginEdit();
         mouseMode = DRAG_VALUE;
         valAtMouseDown = value;
     }
@@ -616,7 +759,15 @@ void ModulationSourceButton::mouseDrag(const juce::MouseEvent &event)
         return;
     }
 
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+
     getParentComponent()->toFront(false);
+
+    if (sge)
+    {
+        sge->frontNonModalOverlays();
+    }
+
     toFront(false);
 
     if (mouseMode != DRAG_COMPONENT_HAPPEN)
@@ -627,7 +778,6 @@ void ModulationSourceButton::mouseDrag(const juce::MouseEvent &event)
     mouseMode = DRAG_COMPONENT_HAPPEN;
     componentDragger.dragComponent(this, event, nullptr);
 
-    auto sge = firstListenerOfType<SurgeGUIEditor>();
     auto q = event.position.translated(getBounds().getX(), getBounds().getY());
     auto ota = transientArmed;
 
@@ -709,6 +859,11 @@ void ModulationSourceButton::resized()
     hamburgerHome = getLocalBounds().withWidth(11).reduced(2, 2);
 
     auto b = getLocalBounds().withWidth(getHeight());
+
+    if (isMeta)
+    {
+        b = b.withTrimmedBottom(10);
+    }
     selectAccButton->setBounds(b);
     b = b.translated(getHeight(), 0);
     targetAccButton->setBounds(b);
@@ -721,12 +876,50 @@ void ModulationSourceButton::resized()
     {
         targetAccButton->setVisible(true);
     }
+
+    if (isMeta)
+    {
+        b = getLocalBounds().withTrimmedTop(getHeight() - 10);
+        macroSlider->setVisible(true);
+        macroSlider->setBounds(b);
+    }
 }
 
 void ModulationOverviewLaunchButton::buttonClicked(Button *button)
 {
     editor->toggleOverlay(SurgeGUIEditor::MODULATION_EDITOR);
     repaint();
+}
+
+void ModulationOverviewLaunchButton::mouseDown(const juce::MouseEvent &event)
+{
+    if (event.mods.isPopupMenu())
+    {
+        juce::PopupMenu contextMenu;
+
+        auto msurl = editor->helpURLForSpecial("mod-list");
+        auto hurl = editor->fullyResolvedHelpURL(msurl);
+
+        editor->addHelpHeaderTo("Modulation List", hurl, contextMenu);
+
+        contextMenu.showMenuAsync(editor->popupMenuOptions(this, false));
+    }
+    else
+    {
+        juce::Button::mouseDown(event);
+    }
+}
+
+bool ModulationOverviewLaunchButton::keyPressed(const juce::KeyPress &key)
+{
+    if (Surge::Widgets::isAccessibleKey(key))
+    {
+        if (!Surge::Storage::getUserDefaultValue(
+                storage, Surge::Storage::DefaultKey::MenuAndEditKeybindingsFollowKeyboardFocus,
+                true))
+            return false;
+    }
+    return juce::Button::keyPressed(key);
 }
 
 void ModulationOverviewLaunchButton::paintButton(juce::Graphics &g,
@@ -736,25 +929,33 @@ void ModulationOverviewLaunchButton::paintButton(juce::Graphics &g,
     auto FillCol = skin->getColor(Colors::ModSource::Unused::Background);
     auto FrameCol = skin->getColor(Colors::ModSource::Unused::Border);
     auto FontCol = skin->getColor(Colors::ModSource::Unused::Text);
+    std::string msg = "List";
 
-    if (shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown)
+    if (isH)
     {
         FrameCol = skin->getColor(Colors::ModSource::Unused::BorderHover);
         FontCol = skin->getColor(Colors::ModSource::Unused::TextHover);
+    }
+
+    if (editor->isAnyOverlayPresent(SurgeGUIEditor::MODULATION_EDITOR))
+    {
+        msg = "Close";
+
+        FrameCol = skin->getColor(Colors::ModSource::Used::Border);
+        FontCol = skin->getColor(Colors::ModSource::Used::Text);
+
+        if (isH)
+        {
+            FrameCol = skin->getColor(Colors::ModSource::Used::BorderHover);
+            FontCol = skin->getColor(Colors::ModSource::Used::TextHover);
+        }
     }
 
     g.fillAll(FillCol);
     g.setColour(FrameCol);
     g.drawRect(getLocalBounds(), 1);
 
-    std::string msg = "List";
-
-    if (editor->isAnyOverlayPresent(SurgeGUIEditor::MODULATION_EDITOR))
-    {
-        msg = "Close";
-    }
-
-    auto f = Surge::GUI::getFontManager()->getLatoAtSize(9);
+    auto f = skin->fontManager->getLatoAtSize(9);
     auto h = f.getHeight() * 0.9f;
     auto sh = h * msg.length();
     auto y0 = (getHeight() - sh) / 2.f;
@@ -769,6 +970,19 @@ void ModulationOverviewLaunchButton::paintButton(juce::Graphics &g,
         g.drawText(s, juce::Rectangle<int>(0, y0, getWidth(), h), juce::Justification::centred);
 
         y0 += h;
+    }
+}
+
+void ModulationSourceButton::setIsBipolar(bool b)
+{
+    auto wasBipolar = isBipolar;
+    isBipolar = b;
+    if (macroSlider && wasBipolar != isBipolar)
+    {
+        if (auto h = macroSlider->getAccessibilityHandler())
+        {
+            h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+        }
     }
 }
 

@@ -1,4 +1,28 @@
-#pragma once
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+#ifndef SURGE_SRC_COMMON_STRINGOPS_H
+#define SURGE_SRC_COMMON_STRINGOPS_H
+
+#include <string>
 
 /*
  * There are a number of places in Surge where raw C strings are copied around.
@@ -35,3 +59,34 @@ static inline void strxcpy(char *const dst, const char *const src, const size_t 
  * bytes now also use this constant.
  */
 #define TXT_SIZE 256
+
+namespace Surge
+{
+namespace GUI
+{
+/*
+ * Used to convert letter case for menu entries
+ * Input string should be macOS style (Menu Entry is Like This)
+ * Output is string in Windows style (Menu entry is like this), or unmodified if we're on Mac
+ */
+inline std::string toOSCase(const std::string &iMenuName)
+{
+#if WINDOWS
+    auto menuName = iMenuName;
+
+    for (auto i = 1; i < menuName.length() - 1; ++i)
+    {
+        if (!(isupper(menuName[i]) && (isupper(menuName[i + 1]) || !isalpha(menuName[i + 1]))))
+        {
+            menuName[i] = std::tolower(menuName[i]);
+        }
+    }
+
+    return menuName;
+#else
+    return iMenuName;
+#endif
+}
+} // namespace GUI
+} // namespace Surge
+#endif // SURGE_SRC_COMMON_STRINGOPS_H

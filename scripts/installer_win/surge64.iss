@@ -10,8 +10,10 @@
 #endif
 
 ; uncomment these two lines if building the installer locally!
-;#define SURGE_SRC "..\..\"
-;#define SURGE_BIN "..\..\build\"
+; #define SURGE_SRC "..\..\"
+; #define SURGE_BIN "..\..\build\Release"
+
+#define BANNER_PATH SURGE_SRC + "\scripts\installer_win\assets\banner"
 
 [Setup]
 ArchitecturesInstallIn64BitMode=x64
@@ -31,7 +33,7 @@ DisableDirPage=yes
 DisableReadyPage=no
 LicenseFile={#SURGE_SRC}\LICENSE
 OutputBaseFilename=surge-xt-win64-{#MyAppVersion}-setup
-SetupIconFile={#SURGE_SRC}\scripts\installer_win\surge.ico
+SetupIconFile={#SURGE_SRC}\scripts\installer_win\assets\surge.ico
 UninstallDisplayIcon={uninstallexe}
 UsePreviousAppDir=yes
 Compression=lzma
@@ -40,8 +42,10 @@ UninstallFilesDir={commonappdata}\{#MyAppName}\uninstall
 CloseApplicationsFilter=*.exe,*.vst3,*.ttf
 WizardStyle=modern
 ; replacing that gnarly old blue computer icon in top right with... nothing!
-WizardSmallImageFile={#SURGE_SRC}\scripts\installer_win\empty.bmp
+WizardSmallImageFile={#SURGE_SRC}\scripts\installer_win\assets\empty.bmp
 WizardImageAlphaFormat=defined
+; replacing the left side banner on the last page with something way more awesome!
+WizardImageFile={#BANNER_PATH}1.bmp,{#BANNER_PATH}2.bmp,{#BANNER_PATH}3.bmp,{#BANNER_PATH}4.bmp
 
 [InstallDelete]
 ; clean up factory data folders
@@ -68,10 +72,10 @@ Name: "custom"; Description: "Custom installation"; Flags: iscustom
 Name: "minimal"; Description: "Minimal installation"
 
 [Components]
+Name: CLAP; Description: {#MyAppName} CLAP (64-bit); Types: full compact custom minimal; Flags: checkablealone
+Name: EffectsCLAP; Description: {#MyAppName} Effects CLAP (64-bit); Types: full custom; Flags: checkablealone
 Name: VST3; Description: {#MyAppName} VST3 (64-bit); Types: full compact custom minimal; Flags: checkablealone
 Name: EffectsVST3; Description: {#MyAppName} Effects VST3 (64-bit); Types: full custom; Flags: checkablealone
-Name: CLAP; Description: {#MyAppName} Clap (64-bit, Clap 0.18); Types: full compact custom minimal; Flags: checkablealone
-Name: EffectsCLAP; Description: {#MyAppName} Effects Clap (64-bit, Clap 0.18); Types: full custom; Flags: checkablealone
 Name: SA; Description: {#MyAppName} Standalone (64-bit); Types: full compact custom; Flags: checkablealone
 Name: EffectsSA; Description: {#MyAppName} Effects Standalone (64-bit); Types: full custom; Flags: checkablealone
 Name: Data; Description: Data Files; Types: full compact custom minimal; Flags: fixed
@@ -89,16 +93,16 @@ Source: {#SURGE_SRC}\resources\data\patches_factory\*; DestDir: {commonappdata}\
 Source: {#SURGE_SRC}\resources\data\patches_3rdparty\*; DestDir: {commonappdata}\{#MyAppName}\patches_3rdparty\; Components: Patches; Flags: recursesubdirs
 Source: {#SURGE_SRC}\resources\data\wavetables\*; DestDir: {commonappdata}\{#MyAppName}\wavetables\; Components: Wavetables; Flags: recursesubdirs
 Source: {#SURGE_SRC}\resources\data\wavetables_3rdparty\*; DestDir: {commonappdata}\{#MyAppName}\wavetables_3rdparty\; Components: Wavetables; Flags: recursesubdirs
-Source: {#SURGE_SRC}\resources\fonts\FiraMono-Regular.ttf; DestDir: "{fonts}"; Components: Data; FontInstall: "Fira Mono"; Flags: onlyifdoesntexist uninsneveruninstall
-Source: {#SURGE_SRC}\resources\fonts\IndieFlower.ttf; DestDir: "{fonts}"; Components: Data; FontInstall: "Indie Flower"; Flags: onlyifdoesntexist uninsneveruninstall
-Source: {#SURGE_SRC}\resources\fonts\Lato-Regular.ttf; DestDir: "{fonts}"; Components: Data; FontInstall: "Lato"; Flags: onlyifdoesntexist uninsneveruninstall
-Source: {#SURGE_SRC}\resources\fonts\Lato-Bold.ttf; DestDir: "{fonts}"; Components: Data; FontInstall: "Lato Bold"; Flags: onlyifdoesntexist uninsneveruninstall
-Source: {#SURGE_SRC}\resources\fonts\Lato-BoldItalic.ttf; DestDir: "{fonts}"; Components: Data; FontInstall: "Lato Bold Italic"; Flags: onlyifdoesntexist uninsneveruninstall
-Source: {#SURGE_SRC}\resources\fonts\Lato-Italic.ttf; DestDir: "{fonts}"; Components: Data; FontInstall: "Lato Italic"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: {#SURGE_SRC}\resources\fonts\FiraMono-Regular.ttf; DestDir: "{autofonts}"; Components: Data; FontInstall: "Fira Mono"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: {#SURGE_SRC}\resources\fonts\IndieFlower.ttf; DestDir: "{autofonts}"; Components: Data; FontInstall: "Indie Flower"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: {#SURGE_SRC}\resources\fonts\Lato-Regular.ttf; DestDir: "{autofonts}"; Components: Data; FontInstall: "Lato"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: {#SURGE_SRC}\resources\fonts\Lato-Bold.ttf; DestDir: "{autofonts}"; Components: Data; FontInstall: "Lato Bold"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: {#SURGE_SRC}\resources\fonts\Lato-BoldItalic.ttf; DestDir: "{autofonts}"; Components: Data; FontInstall: "Lato Bold Italic"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: {#SURGE_SRC}\resources\fonts\Lato-Italic.ttf; DestDir: "{autofonts}"; Components: Data; FontInstall: "Lato Italic"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName}.clap; DestDir: {commoncf64}\CLAP\{#MyAppPublisher}\; Components: CLAP; Flags: ignoreversion recursesubdirs
+Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName} Effects.clap; DestDir: {commoncf64}\CLAP\{#MyAppPublisher}\; Components: EffectsCLAP; Flags: ignoreversion skipifsourcedoesntexist recursesubdirs
 Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName}.vst3\*; DestDir: {commoncf64}\VST3\{#MyAppPublisher}\{#MyAppName}.vst3\; Components: VST3; Flags: ignoreversion recursesubdirs
 Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName} Effects.vst3\*; DestDir: {commoncf64}\VST3\{#MyAppPublisher}\{#MyAppName} Effects.vst3\; Components: EffectsVST3; Flags: ignoreversion skipifsourcedoesntexist recursesubdirs
-Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName}.clap; DestDir: {commoncf64}\Clap\{#MyAppPublisher}\{#MyAppName}.clap; Components: CLAP; Flags: ignoreversion recursesubdirs
-Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName} Effects.clap; DestDir: {commoncf64}\Clap\{#MyAppPublisher}\{#MyAppName} Effects.clap; Components: EffectsCLAP; Flags: ignoreversion skipifsourcedoesntexist recursesubdirs
 Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName}.exe; DestDir: {commonpf64}\{#MyAppPublisher}\{#MyAppName}\; Components: SA; Flags: ignoreversion
 Source: {#SURGE_BIN}\surge_xt_products\{#MyAppName} Effects.exe; DestDir: {commonpf64}\{#MyAppPublisher}\{#MyAppName}\; Components: EffectsSA; Flags: ignoreversion
 
@@ -107,13 +111,21 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Icons]
 Name: "{group}\{#MyAppPublisher}\{#MyAppName}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{group}\{#MyAppPublisher}\{#MyAppName}\{#MyAppName}"; Filename: "{commonpf64}\{#MyAppPublisher}\{#MyAppName}\{#MyAppName}.exe"; WorkingDir: "{commonpf64}\{#MyAppPublisher}\{#MyAppName}"
+Name: "{group}\{#MyAppPublisher}\{#MyAppName}\{#MyAppName}"; Filename: "{commonpf64}\{#MyAppPublisher}\{#MyAppName}\{#MyAppName}.exe"; WorkingDir: "{commonpf64}\{#MyAppPublisher}\{#MyAppName}"; Flags: createonlyiffileexists
+Name: "{group}\{#MyAppPublisher}\{#MyAppName}\{#MyAppName} Effects"; Filename: "{commonpf64}\{#MyAppPublisher}\{#MyAppName}\{#MyAppName} Effects.exe"; WorkingDir: "{commonpf64}\{#MyAppPublisher}\{#MyAppName}"; Flags: createonlyiffileexists
 
 [Run]
 Filename: "{cmd}"; \
+    WorkingDir: "{commoncf64}\CLAP"; \
+    Parameters: "/C mklink /D /J  ""{commoncf64}\CLAP\{#MyAppPublisher}\{#MyAppNameCondensed}Data"" ""{commonappdata}\{#MyAppName}"""; \
+    Flags: runascurrentuser; \
+    Check: WizardIsComponentSelected('CLAP') or WizardIsComponentSelected('EffectsCLAP')
+
+Filename: "{cmd}"; \
     WorkingDir: "{commoncf64}\VST3"; \
     Parameters: "/C mklink /D /J  ""{commoncf64}\VST3\{#MyAppPublisher}\{#MyAppNameCondensed}Data"" ""{commonappdata}\{#MyAppName}"""; \
-    Flags: runascurrentuser
+    Flags: runascurrentuser; \
+    Check: WizardIsComponentSelected('VST3') or WizardIsComponentSelected('EffectsVST3')
 
 [Code]
 procedure AddToReadyMemo(var Memo: string; Info, NewLine: string);
@@ -143,14 +155,23 @@ begin
   Result := Result + 'Installation Locations:' + NewLine
   Result := Result + Space + 'Data Files: ' + AppData + '\' + AppName + NewLine
 
+  if IsSelected('clap') or IsSelected('effectsclap') then
+    Result := Result + Space + 'CLAP: ' + CF + '\CLAP\' + AppPublisher + '\' + NewLine;
+
   if IsSelected('vst3') or IsSelected('effectsvst3') then
     Result := Result + Space + 'VST3: ' + CF + '\VST3\' + AppPublisher + '\' + NewLine;
-
-  if IsSelected('clap') or IsSelected('effectsclap') then
-    Result := Result + Space + 'Clap: ' + CF + '\Clap\' + AppPublisher + '\' + NewLine;
 
   if IsSelected('sa') or IsSelected('effectssa') then
     Result := Result + Space + 'Standalone: ' + PF + '\' + AppPublisher + '\' + AppName + '\' + NewLine;
 
-  Result := Result + Space + 'Portable Junction: ' + CF + '\VST3\' + AppPublisher + '\' + AppNameCondensed + 'Data' + NewLine
+  if (IsSelected('clap') or IsSelected('effectsclap')) and (IsSelected('vst3') or IsSelected('effectsvst3')) then
+    Result := Result + Space + 'Portable Junctions:' + NewLine
+  else
+    Result := Result + Space + 'Portable Junction:' + NewLine;
+  
+  if IsSelected('clap') or IsSelected('effectsclap') then
+    Result := Result + Space + Space + 'CLAP: ' + CF + '\CLAP\' + AppPublisher + '\' + AppNameCondensed + 'Data' + NewLine;
+
+  if IsSelected('vst3') or IsSelected('effectsvst3') then
+    Result := Result + Space + Space + 'VST3: ' + CF + '\VST3\' + AppPublisher + '\' + AppNameCondensed + 'Data' + NewLine;
 end;

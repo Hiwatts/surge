@@ -1,20 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_TYPEINPARAMEDITOR_H
-#define SURGE_XT_TYPEINPARAMEDITOR_H
+#ifndef SURGE_SRC_SURGE_XT_GUI_OVERLAYS_TYPEINPARAMEDITOR_H
+#define SURGE_SRC_SURGE_XT_GUI_OVERLAYS_TYPEINPARAMEDITOR_H
 
 #include "Parameter.h"
 #include "SurgeStorage.h"
@@ -51,10 +58,11 @@ struct TypeinParamEditor : public juce::Component,
 
     Parameter *p{nullptr};
     void setEditedParam(Parameter *pin) { p = pin; };
+    int activateModsourceAfterEnter{-1};
     bool isMod{false};
     modsources ms{ms_original};
     int modScene{-1}, modidx{0};
-    void setModulation(bool isMod, modsources ms, int modScene, int modidx)
+    void setModDepth01(bool isMod, modsources ms, int modScene, int modidx)
     {
         this->isMod = isMod;
         this->ms = ms;
@@ -76,10 +84,10 @@ struct TypeinParamEditor : public juce::Component,
         secondaryVal = sec;
     }
 
-    std::string modbyLabel;
+    std::string modbyLabel, errorToDisplay;
     void setModByLabel(const std::string &by) { modbyLabel = by; }
 
-    virtual bool handleTypein(const std::string &value);
+    virtual bool handleTypein(const std::string &value, std::string &errMsg);
 
     void setEditableText(const std::string &et) { textEd->setText(et, juce::dontSendNotification); }
 
@@ -107,7 +115,10 @@ struct TypeinParamEditor : public juce::Component,
 struct TypeinLambdaEditor : public TypeinParamEditor
 {
     TypeinLambdaEditor(std::function<bool(const std::string &)> c) : callback(c){};
-    bool handleTypein(const std::string &value) override { return callback(value); }
+    bool handleTypein(const std::string &value, std::string &errMsg) override
+    {
+        return callback(value);
+    }
     std::function<bool(const std::string &)> callback;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TypeinLambdaEditor);
 };

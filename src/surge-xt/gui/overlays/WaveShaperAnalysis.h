@@ -1,59 +1,68 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_WAVESHAPERANALYSIS_H
-#define SURGE_XT_WAVESHAPERANALYSIS_H
+#ifndef SURGE_SRC_SURGE_XT_GUI_OVERLAYS_WAVESHAPERANALYSIS_H
+#define SURGE_SRC_SURGE_XT_GUI_OVERLAYS_WAVESHAPERANALYSIS_H
 
 #include "OverlayComponent.h"
 #include "SkinSupport.h"
 #include "FilterConfiguration.h"
 #include "SurgeGUICallbackInterfaces.h"
 #include "widgets/ModulatableSlider.h"
+#include "widgets/MultiSwitch.h"
 
 class SurgeStorage;
+class SurgeGUIEditor;
 
 namespace Surge
 {
 namespace Overlays
 {
-struct WaveShaperAnalysis : public OverlayComponent,
-                            Surge::GUI::SkinConsumingComponent,
-                            Surge::GUI::IComponentTagValue::Listener
+struct WaveShaperAnalysis : public OverlayComponent, Surge::GUI::SkinConsumingComponent
 {
-    WaveShaperAnalysis(SurgeStorage *s);
+    SurgeGUIEditor *editor{nullptr};
+    SurgeStorage *storage{nullptr};
+    WaveShaperAnalysis(SurgeGUIEditor *e, SurgeStorage *s);
     void paint(juce::Graphics &g) override;
     void onSkinChanged() override;
     void resized() override;
 
-    void valueChanged(Surge::GUI::IComponentTagValue *p) override;
-    int32_t controlModifierClicked(Surge::GUI::IComponentTagValue *p,
-                                   const juce::ModifierKeys &mods,
-                                   bool isDoubleClickEvent) override;
-
     void recalcFromSlider();
 
     void setWSType(int wst);
-    int wstype{0};
+    sst::waveshapers::WaveshaperType wstype{sst::waveshapers::WaveshaperType::wst_none};
 
-    std::unique_ptr<Surge::Widgets::ModulatableSlider> tryitSlider;
+    bool shouldRepaintOnParamChange(const SurgePatch &patch, Parameter *p) override;
+
+    float getDbValue();
+    float lastDbValue{-100};
+
+    float getPFG();
+    float lastPFG{-100};
 
     static constexpr int npts = 256;
 
-    typedef std::vector<std::pair<float, float>> curve_t;
+    typedef std::vector<std::tuple<float, float, float>> curve_t; // x, in, out
     curve_t sliderDrivenCurve;
-    float sliderDb;
 };
 } // namespace Overlays
 } // namespace Surge

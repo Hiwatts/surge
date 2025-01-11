@@ -1,3 +1,24 @@
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 #include "SkinColors.h"
 
 namespace Colors
@@ -284,9 +305,9 @@ const Surge::Skin::Color Background("modbutton.armed.fill", 0x74AC48),
 namespace Macro
 {
 const Surge::Skin::Color Background("modbutton.macro.slider.background", 0x205DB0),
+    Border("modbutton.macro.slider.border", 0x123463),
     Fill("modbutton.macro.slider.fill", 0x2E86FE),
     CurrentValue("modbutton.macro.slider.currentvalue", 0xFF9000);
-
 }
 } // namespace ModSource
 
@@ -340,6 +361,11 @@ namespace Display
 {
 const Surge::Skin::Color Bounds("osc.line.bounds", 0x464646), Center("osc.line.center", 0x5A5A5A),
     AnimatedWave("osc.waveform.animated", 0xFFFFFF), Wave("osc.waveform", 0xFF9000),
+    WaveCurrent3D("osc.waveform3d.current", 0xFF9000, 0xFF),
+    WaveStart3D("osc.waveform3d.gradient.start", 0xA06010),
+    WaveEnd3D("osc.waveform3d.gradient.end", 0xA06010),
+    WaveFillStart3D("osc.waveform3d.fill.gradient.start", 0xEB6E00, 0x32),
+    WaveFillEnd3D("osc.waveform3d.fill.gradient.end", 0xFF5A00, 0x32),
     Dots("osc.waveform.dots", 0x404040);
 }
 namespace Filename
@@ -375,12 +401,13 @@ const Surge::Skin::Color Border("waveshaper.preview.border", 0xFFFFFF),
 
 namespace Overlay
 {
-const Surge::Skin::Color Background("editor.overlay.background", 0xCC000000);
+const Surge::Skin::Color Background("editor.overlay.background", 0xD9000000);
 }
 
 namespace PatchBrowser
 {
-const Surge::Skin::Color Text("patchbrowser.text", 0x000000, 0xFF);
+const Surge::Skin::Color Text("patchbrowser.text", 0x000000, 0xFF),
+    TextHover("patchbrowser.text.hover", 0x000000, 0x00);
 
 namespace CommentTooltip
 {
@@ -447,6 +474,12 @@ namespace VirtualKeyboard
 {
 const Surge::Skin::Color Text("vkb.text", 0x000000, 0xFF), Shadow("vkb.shadow", 0x40000000);
 
+namespace Wheel
+{
+const Surge::Skin::Color Background("vkb.wheel.background", 0xFFFFFF),
+    Border("vkb.wheel.border", 0x979797), Value("vkb.wheel.value", 0xFF9000);
+}
+
 namespace Key
 {
 const Surge::Skin::Color Black("vkb.key.black", 0x000000, 0xFF), White("vkb.key.white", 0xFFFFFF),
@@ -477,7 +510,7 @@ const Surge::Skin::Color Background("multiswitch.background", 0xE3E3E3),
     Border("multiswitch.border", 0x979797), Separator("multiswitch.separator", 0x979797),
     DeactivatedText("multiswitch.text.deactivated", 0x979797),
     Text("multiswitch.text", 0x000000, 0xFF), OnText("multiswitch.on.text", 0x000000, 0xFF),
-    HoverText("multiswitch.hover.text", 0x000000, 0xFF),
+    TextHover("multiswitch.hover.text", 0x000000, 0xFF),
     HoverOnText("multiswitch.hoveron.text", 0xFF9300),
     HoverFill("multiswitch.hover.fill", 0xF1BB72),
     HoverOnFill("multiswitch.hoveron.fill", 0x804900), OnFill("multiswitch.on.fill", 0xFF9A10),

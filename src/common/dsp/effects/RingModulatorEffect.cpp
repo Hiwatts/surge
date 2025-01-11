@@ -1,8 +1,31 @@
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 #include "RingModulatorEffect.h"
 #include "Tunings.h"
 #include "SineOscillator.h"
 #include "DebugHelpers.h"
-#include "FastMath.h"
+#include "sst/basic-blocks/dsp/FastMath.h"
+#include "sst/basic-blocks/mechanics/block-ops.h"
+namespace mech = sst::basic_blocks::mechanics;
 
 // http://recherche.ircam.fr/pub/dafx11/Papers/66_e.pdf
 
@@ -28,10 +51,10 @@ void RingModulatorEffect::setvars(bool init)
         lp.suspend();
         hp.suspend();
 
-        hp.coeff_HP(hp.calc_omega(*f[rm_lowcut] / 12.0), 0.707);
+        hp.coeff_HP(hp.calc_omega(*pd_float[rm_lowcut] / 12.0), 0.707);
         hp.coeff_instantize();
 
-        lp.coeff_LP2B(lp.calc_omega(*f[rm_highcut] / 12.0), 0.707);
+        lp.coeff_LP2B(lp.calc_omega(*pd_float[rm_highcut] / 12.0), 0.707);
         lp.coeff_instantize();
 
         mix.instantize();
@@ -42,11 +65,16 @@ void RingModulatorEffect::setvars(bool init)
 
 void RingModulatorEffect::process(float *dataL, float *dataR)
 {
-    mix.set_target_smoothed(clamp01(*f[rm_mix]));
+    mix.set_target_smoothed(clamp01(*pd_float[rm_mix]));
 
     float wetL alignas(16)[BLOCK_SIZE], wetR alignas(16)[BLOCK_SIZE];
     float dphase[MAX_UNISON];
-    auto uni = std::max(1, *pdata_ival[rm_unison_voices]);
+    auto uni = std::max(1, *pd_int[rm_unison_voices]);
+
+    auto isAudioIn = (*pd_int[rm_carrier_shape] == fxdata->p[rm_carrier_shape].val_max.i);
+
+    if (isAudioIn)
+        uni = 1;
 
     // Has unison reset? If so modify settings
     if (uni != last_unison)
@@ -76,14 +104,14 @@ void RingModulatorEffect::process(float *dataL, float *dataR)
 
     // gain scale based on unison
     float gscale = 0.4 + 0.6 * (1.f / sqrtf(uni));
-    double sri = dsamplerate_inv;
+    double sri = storage->dsamplerate_inv;
     int ub = BLOCK_SIZE;
 
 #if OVERSAMPLE
     // Now upsample
     float dataOS alignas(16)[2][BLOCK_SIZE_OS];
-    halfbandIN.process_block_U2(dataL, dataR, dataOS[0], dataOS[1]);
-    sri = dsamplerate_os_inv;
+    halfbandIN.process_block_U2(dataL, dataR, dataOS[0], dataOS[1], BLOCK_SIZE_OS);
+    sri = storage->dsamplerate_os_inv;
     ub = BLOCK_SIZE_OS;
 #else
     float *dataOS[2];
@@ -91,23 +119,27 @@ void RingModulatorEffect::process(float *dataL, float *dataR)
     dataOS[1] = dataR;
 #endif
 
-    for (int u = 0; u < uni; ++u)
+    if (!isAudioIn)
     {
-        // need to calc this every time since carrier freq could change
-        if (fxdata->p[rm_unison_detune].absolute)
+        for (int u = 0; u < uni; ++u)
         {
-            dphase[u] = (storage->note_to_pitch(*f[rm_carrier_freq]) * Tunings::MIDI_0_FREQ +
-                         fxdata->p[rm_unison_detune].get_extended(
-                             fxdata->p[rm_unison_detune].val.f * detune_offset[u])) *
-                        sri;
-        }
-        else
-        {
-            dphase[u] =
-                storage->note_to_pitch(*f[rm_carrier_freq] +
-                                       fxdata->p[rm_unison_detune].get_extended(
-                                           fxdata->p[rm_unison_detune].val.f * detune_offset[u])) *
-                Tunings::MIDI_0_FREQ * sri;
+            // need to calc this every time since carrier freq could change
+            if (fxdata->p[rm_unison_detune].absolute)
+            {
+                dphase[u] =
+                    (storage->note_to_pitch(*pd_float[rm_carrier_freq] +
+                                            fxdata->p[rm_unison_detune].get_extended(
+                                                *pd_float[rm_unison_detune] * detune_offset[u]))) *
+                    sri;
+            }
+            else
+            {
+                dphase[u] =
+                    storage->note_to_pitch(*pd_float[rm_carrier_freq] +
+                                           fxdata->p[rm_unison_detune].get_extended(
+                                               *pd_float[rm_unison_detune] * detune_offset[u])) *
+                    Tunings::MIDI_0_FREQ * sri;
+            }
         }
     }
 
@@ -116,15 +148,27 @@ void RingModulatorEffect::process(float *dataL, float *dataR)
         float resL = 0, resR = 0;
         for (int u = 0; u < uni; ++u)
         {
-            // TODO efficiency of course
-            auto vc = SineOscillator::valueFromSinAndCos(
-                Surge::DSP::fastsin(2.0 * M_PI * (phase[u] - 0.5)),
-                Surge::DSP::fastcos(2.0 * M_PI * (phase[u] - 0.5)), *pdata_ival[rm_carrier_shape]);
-            phase[u] += dphase[u];
+            float vc[2]{0.f, 0.f};
 
-            if (phase[u] > 1)
+            if (isAudioIn)
             {
-                phase[u] -= (int)phase[u];
+                vc[0] = storage->audio_in[0][i] * 2.0;
+                vc[1] = storage->audio_in[1][i] * 2.0;
+            }
+            else
+            {
+                // TODO efficiency of course
+                vc[0] = SineOscillator::valueFromSinAndCos(
+                    sst::basic_blocks::dsp::fastsin(2.0 * M_PI * (phase[u] - 0.5)),
+                    sst::basic_blocks::dsp::fastcos(2.0 * M_PI * (phase[u] - 0.5)),
+                    *pd_int[rm_carrier_shape]);
+                vc[1] = vc[0];
+                phase[u] += dphase[u];
+
+                if (phase[u] > 1)
+                {
+                    phase[u] -= (int)phase[u];
+                }
             }
 
             for (int c = 0; c < 2; ++c)
@@ -132,8 +176,8 @@ void RingModulatorEffect::process(float *dataL, float *dataR)
                 auto vin = (c == 0 ? dataOS[0][i] : dataOS[1][i]);
                 auto wd = 1.0;
 
-                auto A = 0.5 * vin + vc;
-                auto B = vc - 0.5 * vin;
+                auto A = 0.5 * vin + vc[c];
+                auto B = vc[c] - 0.5 * vin;
 
                 float dPA = diode_sim(A);
                 float dMA = diode_sim(-A);
@@ -157,14 +201,14 @@ void RingModulatorEffect::process(float *dataL, float *dataR)
     }
 
 #if OVERSAMPLE
-    halfbandOUT.process_block_D2(dataOS[0], dataOS[1]);
-    copy_block(dataOS[0], wetL, BLOCK_SIZE_QUAD);
-    copy_block(dataOS[1], wetR, BLOCK_SIZE_QUAD);
+    halfbandOUT.process_block_D2(dataOS[0], dataOS[1], BLOCK_SIZE_OS);
+    mech::copy_from_to<BLOCK_SIZE>(dataOS[0], wetL);
+    mech::copy_from_to<BLOCK_SIZE>(dataOS[1], wetR);
 #endif
 
     // Apply the filters
-    hp.coeff_HP(hp.calc_omega(*f[rm_lowcut] / 12.0), 0.707);
-    lp.coeff_LP2B(lp.calc_omega(*f[rm_highcut] / 12.0), 0.707);
+    hp.coeff_HP(hp.calc_omega(*pd_float[rm_lowcut] / 12.0), 0.707);
+    lp.coeff_LP2B(lp.calc_omega(*pd_float[rm_highcut] / 12.0), 0.707);
 
     if (!fxdata->p[rm_highcut].deactivated)
     {
@@ -176,7 +220,7 @@ void RingModulatorEffect::process(float *dataL, float *dataR)
         hp.process_block(wetL, wetR);
     }
 
-    mix.fade_2_blocks_to(dataL, wetL, dataR, wetR, dataL, dataR, BLOCK_SIZE_QUAD);
+    mix.fade_2_blocks_inplace(dataL, wetL, dataR, wetR, BLOCK_SIZE_QUAD);
 }
 
 void RingModulatorEffect::suspend() { init(); }
@@ -215,16 +259,45 @@ int RingModulatorEffect::group_label_ypos(int id)
 
 void RingModulatorEffect::init_ctrltypes()
 {
+    static struct RQD : public ParameterDynamicDeactivationFunction
+    {
+        bool getValue(const Parameter *p) const override
+        {
+            auto fx = &(p->storage->getPatch().fx[p->ctrlgroup_entry]);
+            auto idx = p - fx->p;
+            auto isAudioIn = (fx->p[rm_carrier_shape].val.i == fx->p[rm_carrier_shape].val_max.i);
+
+            switch (idx)
+            {
+            case rm_carrier_freq:
+            case rm_unison_detune:
+            case rm_unison_voices:
+                return isAudioIn;
+            default:
+                break;
+            }
+
+            return false;
+        }
+        Parameter *getPrimaryDeactivationDriver(const Parameter *p) const override
+        {
+            return nullptr;
+        }
+    } rmGroupDeact;
+
     Effect::init_ctrltypes();
 
     fxdata->p[rm_carrier_shape].set_name("Shape");
-    fxdata->p[rm_carrier_shape].set_type(ct_sineoscmode);
+    fxdata->p[rm_carrier_shape].set_type(ct_ringmod_sineoscmode);
     fxdata->p[rm_carrier_freq].set_name("Frequency");
     fxdata->p[rm_carrier_freq].set_type(ct_freq_ringmod);
+    fxdata->p[rm_carrier_freq].dynamicDeactivation = &rmGroupDeact;
     fxdata->p[rm_unison_detune].set_name("Unison Detune");
     fxdata->p[rm_unison_detune].set_type(ct_oscspread);
+    fxdata->p[rm_unison_detune].dynamicDeactivation = &rmGroupDeact;
     fxdata->p[rm_unison_voices].set_name("Unison Voices");
     fxdata->p[rm_unison_voices].set_type(ct_osccount);
+    fxdata->p[rm_unison_voices].dynamicDeactivation = &rmGroupDeact;
 
     fxdata->p[rm_diode_fwdbias].set_name("Forward Bias");
     fxdata->p[rm_diode_fwdbias].set_type(ct_percent);
@@ -281,8 +354,8 @@ void RingModulatorEffect::handleStreamingMismatches(int streamingRevision,
 
 float RingModulatorEffect::diode_sim(float v)
 {
-    auto vb = *(f[rm_diode_fwdbias]);
-    auto vl = *(f[rm_diode_linregion]);
+    auto vb = *(pd_float[rm_diode_fwdbias]);
+    auto vl = *(pd_float[rm_diode_linregion]);
     auto h = 1.f;
     vl = std::max(vl, vb + 0.02f);
     if (v < vb)

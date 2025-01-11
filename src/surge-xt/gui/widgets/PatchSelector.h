@@ -1,20 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_PATCHSELECTOR_H
-#define SURGE_XT_PATCHSELECTOR_H
+#ifndef SURGE_SRC_SURGE_XT_GUI_WIDGETS_PATCHSELECTOR_H
+#define SURGE_SRC_SURGE_XT_GUI_WIDGETS_PATCHSELECTOR_H
 
 #include "SkinSupport.h"
 #include "WidgetBaseMixin.h"
@@ -60,11 +67,7 @@ struct PatchSelector : public juce::Component,
     }
 
     bool isFavorite{false};
-    void setIsFavorite(bool b)
-    {
-        isFavorite = b;
-        repaint();
-    }
+    void setIsFavorite(bool b);
 
     bool isUser{false};
     void setIsUser(bool b)
@@ -107,39 +110,57 @@ struct PatchSelector : public juce::Component,
 
     /// TypeAhead API
     void itemSelected(int providerIndex) override;
+    void itemFocused(int providerIndex) override;
     void typeaheadCanceled() override;
 
     void resized() override;
     void mouseDown(const juce::MouseEvent &event) override;
-    bool favoritesHover{false}, searchHover{false};
+    bool favoritesHover{false}, searchHover{false}, browserHover{false}, stuckHover{false};
     void mouseMove(const juce::MouseEvent &event) override;
     void mouseEnter(const juce::MouseEvent &event) override;
     void mouseExit(const juce::MouseEvent &event) override { endHover(); }
+
+    bool isCurrentlyHovered() override { return favoritesHover || searchHover || browserHover; }
+
     void endHover() override
     {
+        if (stuckHover)
+            return;
+
+        browserHover = false;
         favoritesHover = false;
         searchHover = false;
         tooltipCountdown = -1;
         // toggleCommentTooltip(false);
         repaint();
     }
+
     bool keyPressed(const juce::KeyPress &key) override;
-    void showClassicMenu(bool singleCategory = false);
+    void showClassicMenu(bool singleCategory = false, bool userOnly = false);
     bool optionallyAddFavorites(juce::PopupMenu &into, bool addColumnBreakAndHeader,
                                 bool addToSubmenu = true);
+    void exportFavorites();
+    void importFavorites();
     void openPatchBrowser();
 
     void paint(juce::Graphics &g) override;
 
     void loadPatch(int id);
+    void loadInitPatch();
     int sel_id = 0, enqueue_sel_id = 0;
 
     int getCurrentPatchId() const;
     int getCurrentCategoryId() const;
 
+    void idle(); // called by SGE::idle
+
+    bool wasTypeaheadCanceledSinceLastIdle{false};
     bool isTypeaheadSearchOn{false};
     void toggleTypeAheadSearch(bool);
     void enableTypeAheadIfReady();
+    void searchUpdated();
+    void typeaheadButtonPressed();
+    uint32_t outstandingSearches{0};
     std::unique_ptr<Surge::Widgets::TypeAhead> typeAhead;
     std::unique_ptr<PatchDBTypeAheadProvider> patchDbProvider;
 
@@ -173,6 +194,12 @@ struct PatchSelector : public juce::Component,
     bool populatePatchMenuForCategory(int index, juce::PopupMenu &contextMenu, bool single_category,
                                       int &main_e, bool rootCall);
 
+    // a little transparent button to alow ally and focus over find and fav
+    struct TB;
+    std::unique_ptr<TB> searchButton, favoriteButton;
+    void showFavoritesMenu();
+    void toggleFavoriteStatus();
+
   private:
     std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
@@ -187,7 +214,8 @@ struct PatchSelectorCommentTooltip : public juce::Component,
     void paint(juce::Graphics &g) override;
 
     std::string comment;
-    void positionForComment(const juce::Point<int> &centerPoint, const std::string &comment);
+    void positionForComment(const juce::Point<int> &centerPoint, const std::string &comment,
+                            const int maxTooltipWidth);
 
   protected:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PatchSelectorCommentTooltip);

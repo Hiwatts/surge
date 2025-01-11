@@ -1,25 +1,43 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SurgeVoice.h"
+#include "UserDefaults.h"
 #include "DSPUtils.h"
 #include "QuadFilterChain.h"
-#include <math.h>
+#include "globals.h"
+#include <cmath>
+#ifndef SURGE_SKIP_ODDSOUND_MTS
 #include "libMTSClient.h"
+#endif
+
+#include "sst/basic-blocks/mechanics/block-ops.h"
+#include "sst/basic-blocks/dsp/Clippers.h"
+#include "sst/basic-blocks/dsp/CorrelatedNoise.h"
+#include "CXOR.h"
 
 using namespace std;
+namespace mech = sst::basic_blocks::mechanics;
+namespace sdsp = sst::basic_blocks::dsp;
 
 enum lag_entries
 {
@@ -32,12 +50,12 @@ enum lag_entries
     le_pfg,
 };
 
-inline void set1f(__m128 &m, int i, float f) { *((float *)&m + i) = f; }
+inline void set1f(SIMD_M128 &m, int i, float f) { *((float *)&m + i) = f; }
 
-inline void set1i(__m128 &m, int e, int i) { *((int *)&m + e) = i; }
-inline void set1ui(__m128 &m, int e, unsigned int i) { *((unsigned int *)&m + e) = i; }
+inline void set1i(SIMD_M128 &m, int e, int i) { *((int *)&m + e) = i; }
+inline void set1ui(SIMD_M128 &m, int e, unsigned int i) { *((unsigned int *)&m + e) = i; }
 
-inline float get1f(__m128 m, int i) { return *((float *)&m + i); }
+inline float get1f(SIMD_M128 m, int i) { return *((float *)&m + i); }
 
 float SurgeVoiceState::getPitch(SurgeStorage *storage)
 {
@@ -48,34 +66,38 @@ float SurgeVoiceState::getPitch(SurgeStorage *storage)
     */
     auto res = key + /* mainChannelState->pitchBendInSemitones + */ mpeBend + detune;
 
-    if (storage->oddsound_mts_client && storage->oddsound_mts_active)
+#ifndef SURGE_SKIP_ODDSOUND_MTS
+    if (storage->oddsound_mts_client && storage->oddsound_mts_active_as_client)
     {
         if (storage->oddsoundRetuneMode == SurgeStorage::RETUNE_CONSTANT ||
             key != keyRetuningForKey)
         {
             keyRetuningForKey = key;
-            keyRetuning = MTS_RetuningInSemitones(storage->oddsound_mts_client, key, channel);
+            keyRetuning = MTS_RetuningInSemitones(storage->oddsound_mts_client, key + mpeBend,
+                                                  mtsUseChannelWhenRetuning ? 0 : channel);
         }
         auto rkey = keyRetuning;
 
         res = res + rkey;
     }
-    else if (!storage->isStandardTuning &&
-             storage->tuningApplicationMode == SurgeStorage::RETUNE_MIDI_ONLY)
+    else
+#endif
+        if (!storage->isStandardTuning &&
+            storage->tuningApplicationMode == SurgeStorage::RETUNE_MIDI_ONLY)
     {
         res = storage->remapKeyInMidiOnlyMode(res);
     }
 
-    res = SurgeVoice::channelKeyEquvialent(res, channel, storage, false);
+    res = SurgeVoice::channelKeyEquvialent(res, channel, mpeEnabled, storage, false);
 
     return res;
 }
 
-float SurgeVoice::channelKeyEquvialent(float key, int channel, SurgeStorage *storage,
-                                       bool remapKeyForTuning)
+float SurgeVoice::channelKeyEquvialent(float key, int channel, bool isMpeEnabled,
+                                       SurgeStorage *storage, bool remapKeyForTuning)
 {
     float res = key;
-    if (storage->mapChannelToOctave && !storage->oddsound_mts_active)
+    if (storage->mapChannelToOctave && !isMpeEnabled)
     {
         if (remapKeyForTuning)
         {
@@ -99,7 +121,8 @@ float SurgeVoice::channelKeyEquvialent(float key, int channel, SurgeStorage *sto
         else
         {
             // keys are in tuning space so move cents worth of keys
-            if (storage->isStandardTuning)
+            // We don't know the period in MTS-ESP so default to octave for now
+            if (storage->isStandardTuning || storage->oddsound_mts_active_as_client)
                 res += 12 * shift;
             else
             {
@@ -111,33 +134,66 @@ float SurgeVoice::channelKeyEquvialent(float key, int channel, SurgeStorage *sto
     return res;
 }
 
-SurgeVoice::SurgeVoice() { sampleRateReset(); }
+// This is super useful for debugging placement new issues. Please leave it here until
+// we stabilize 1.3.1 at least
+// #define VOICE_LIFETIME_DEBUG 1
+#ifdef VOICE_LIFETIME_DEBUG
+int voiceCDCount{0};
+#endif
 
-SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *params, int key,
-                       int velocity, int channel, int scene_id, float detune,
-                       MidiKeyState *keyState, MidiChannelState *mainChannelState,
-                       MidiChannelState *voiceChannelState, bool mpeEnabled, int64_t voiceOrder)
+SurgeVoice::SurgeVoice()
+{
+#ifdef VOICE_LIFETIME_DEBUG
+    voiceCDCount++;
+    std::cout << "Calling SurgeVoice CTOR NoArg " << voiceCDCount << std::endl;
+#endif
+}
+
+SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *params,
+                       pdata *paramsUnmod, int key, int velocity, int channel, int scene_id,
+                       float detune, MidiKeyState *keyState, MidiChannelState *mainChannelState,
+                       MidiChannelState *voiceChannelState, bool mpeEnabled, int64_t voiceOrder,
+                       int32_t host_nid, int16_t host_key, int16_t host_chan, float aegStart,
+                       float fegStart)
 //: fb(storage,oscene)
 {
+#ifdef VOICE_LIFETIME_DEBUG
+    voiceCDCount++;
+    std::cout << "Calling SurgeVoice CTOR FullArg " << voiceCDCount << std::endl;
+#endif
     // assign pointers
     this->storage = storage;
     this->scene = oscene;
     this->paramptr = params;
+    this->paramptrUnmod = paramsUnmod;
     this->mpeEnabled = mpeEnabled;
+    this->host_note_id = host_nid;
+    this->originating_host_key = host_key;
+    this->originating_host_channel = host_chan;
+    this->paramModulationCount = 0;
     assert(storage);
     assert(oscene);
 
+    sampleRateReset();
     memcpy(localcopy, paramptr, sizeof(localcopy));
+
+    noteExpressions[VOLUME] = 1.0; // 1 is no amplification
+    noteExpressions[PAN] = 0.5;    // since it is 0 ... 1
+    noteExpressions[PITCH] = 0.0;
+    noteExpressions[TIMBRE] = 0.0;
+    noteExpressions[PRESSURE] = 0.0;
 
     // We want this on the keystate so it survives the voice for mono mode
     keyState->voiceOrder = voiceOrder;
 
+    state.voiceOrderAtCreate = voiceOrder;
+
     age = 0;
     age_release = 0;
+
     state.key = key;
     state.keyRetuningForKey = -1000;
     state.channel = channel;
-    state.voiceOrderAtCreate = voiceOrder;
 
     state.velocity = velocity;
     state.fvel = velocity / 127.f;
@@ -153,32 +209,23 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
     state.voiceChannelState = voiceChannelState;
 
     state.mpePitchBendRange = storage->mpePitchBendRange;
+    state.mpeEnabled = mpeEnabled;
     state.mpePitchBend = ControllerModulationSource(storage->pitchSmoothingMode);
+    state.mpePitchBend.set_samplerate(storage->samplerate, storage->samplerate_inv);
     state.mpePitchBend.init(voiceChannelState->pitchBend / 8192.f);
 
-    if ((scene->polymode.val.i == pm_mono_st_fp) ||
-        (scene->portamento.val.f == scene->portamento.val_min.f))
-        state.portasrc_key = state.getPitch(storage);
-    else
-    {
-        float lk = storage->last_key[scene_id];
-        if (storage->oddsound_mts_client && storage->oddsound_mts_active)
-        {
-            lk += MTS_RetuningInSemitones(storage->oddsound_mts_client, lk, channel);
-            state.portasrc_key = lk;
-        }
-        else
-        {
-            if (storage->mapChannelToOctave)
-                state.portasrc_key = channelKeyEquvialent(lk, state.channel, storage, true);
-            else
-                state.portasrc_key = storage->remapKeyInMidiOnlyMode(lk);
-        }
-    }
-    state.priorpkey = state.portasrc_key;
+#ifndef SURGE_SKIP_ODDSOUND_MTS
+    const bool isCh23Mode = Surge::Storage::getUserDefaultValue(
+        storage, Surge::Storage::UseCh2Ch3ToPlayScenesIndividually, true, false);
+    const bool isChSplitMode = storage->getPatch().scenemode.val.i == sm_chsplit;
+
+    state.mtsUseChannelWhenRetuning =
+        (mpeEnabled || isChSplitMode || isCh23Mode || storage->mapChannelToOctave);
+#endif
+
+    resetPortamentoFrom(storage->last_key[scene_id], channel);
 
     storage->last_key[scene_id] = key;
-    state.portaphase = 0;
     noisegenL[0] = 0.f;
     noisegenR[0] = 0.f;
     noisegenL[1] = 0.f;
@@ -193,12 +240,18 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
     {
         osctype[i] = -1;
     }
+
     memset(&FBP, 0, sizeof(FBP));
     sampleRateReset();
 
     polyAftertouchSource = ControllerModulationSource(storage->smoothingMode);
+    polyAftertouchSource.set_samplerate(storage->samplerate, storage->samplerate_inv);
+
     monoAftertouchSource = ControllerModulationSource(storage->smoothingMode);
+    monoAftertouchSource.set_samplerate(storage->samplerate, storage->samplerate_inv);
+
     timbreSource = ControllerModulationSource(storage->smoothingMode);
+    timbreSource.set_samplerate(storage->samplerate, storage->samplerate_inv);
 
     polyAftertouchSource.init(
         storage->poly_aftertouch[state.scene_id & 1][state.channel & 15][state.key & 127]);
@@ -229,7 +282,8 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
 
         if (scene->lfo[i].shape.val.i == lt_formula)
         {
-            Surge::Formula::setupEvaluatorStateFrom(lfo[i].formulastate, storage->getPatch());
+            Surge::Formula::setupEvaluatorStateFrom(lfo[i].formulastate, storage->getPatch(),
+                                                    scene_id);
             Surge::Formula::setupEvaluatorStateFrom(lfo[i].formulastate, this);
         }
 
@@ -241,15 +295,19 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
     modsources[ms_keytrack] = &keytrackSource;
     modsources[ms_polyaftertouch] = &polyAftertouchSource;
 
-    velocitySource.set_output(0, state.fvel);
+    // Velocity is *almost* never reset except in poly mode,
+    // so init it here then make it adapt smoothly.
+    velocitySource.init(0, state.fvel);
+    velocitySource.smoothingMode = Modulator::SmoothingMode::SLOW_EXP;
+    velocitySource.set_samplerate(storage->samplerate, storage->samplerate_inv);
     releaseVelocitySource.set_output(0, state.freleasevel);
     keytrackSource.set_output(0, 0.f);
 
     ampEGSource.init(storage, &scene->adsr[0], localcopy, &state);
     filterEGSource.init(storage, &scene->adsr[1], localcopy, &state);
+
     modsources[ms_ampeg] = &ampEGSource;
     modsources[ms_filtereg] = &filterEGSource;
-
     modsources[ms_modwheel] = oscene->modsources[ms_modwheel];
     modsources[ms_breath] = oscene->modsources[ms_breath];
     modsources[ms_expression] = oscene->modsources[ms_expression];
@@ -260,14 +318,17 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
     modsources[ms_latest_key] = oscene->modsources[ms_latest_key];
     modsources[ms_timbre] = &timbreSource;
     modsources[ms_pitchbend] = oscene->modsources[ms_pitchbend];
-    for (int i = 0; i < n_customcontrollers; i++)
-        modsources[ms_ctrl1 + i] = oscene->modsources[ms_ctrl1 + i];
     modsources[ms_slfo1] = oscene->modsources[ms_slfo1];
     modsources[ms_slfo2] = oscene->modsources[ms_slfo2];
     modsources[ms_slfo3] = oscene->modsources[ms_slfo3];
     modsources[ms_slfo4] = oscene->modsources[ms_slfo4];
     modsources[ms_slfo5] = oscene->modsources[ms_slfo5];
     modsources[ms_slfo6] = oscene->modsources[ms_slfo6];
+
+    for (int i = 0; i < n_customcontrollers; i++)
+    {
+        modsources[ms_ctrl1 + i] = oscene->modsources[ms_ctrl1 + i];
+    }
 
     /*
     ** We want to snap the rnd and alt
@@ -306,8 +367,8 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
 
     applyModulationToLocalcopy<true>();
 
-    ampEGSource.attack();
-    filterEGSource.attack();
+    ampEGSource.attackFrom(aegStart);
+    filterEGSource.attackFrom(fegStart);
 
     for (int i = 0; i < n_lfos_voice; i++)
     {
@@ -315,29 +376,21 @@ SurgeVoice::SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *oscene, pdata *
     }
 
     calc_ctrldata<true>(0, 0); // init interpolators
-    SetQFB(0, 0);              // init Quad-Filterblock parameter interpolators
+    SetQFB(0, 0);              // init Quad Filter Block parameter interpolators
 
-    // It is imposrtant that switch_toggled comes last since it creates and activates the
+    // It is important that switch_toggled comes last since it creates and activates the
     // oscillators which need the modulation state set in calc_ctrldata to get sample 0
     // right.
     switch_toggled();
-
-    // for (int i = 0; i < 128; i++)
-    //{
-    //   printf("%.7f %.7f %.7f %.7f\n", table_envrate_exp[(i * 4) + 0], table_envrate_exp[(i * 4) +
-    //   1],
-    //          table_envrate_exp[(i * 4) + 2], table_envrate_exp[(i * 4) + 3]);
-    //}
-    // printf("\n");
-    // for (int i = 0; i < 128; i++)
-    //{
-    //   printf("%.7f %.7f %.7f %.7f\n", table_envrate_linear[(i * 4) + 0],
-    //          table_envrate_linear[(i * 4) + 1], table_envrate_linear[(i * 4) + 2],
-    //          table_envrate_linear[(i * 4) + 3]);
-    //}
 }
 
-SurgeVoice::~SurgeVoice() {}
+SurgeVoice::~SurgeVoice()
+{
+#ifdef VOICE_LIFETIME_DEBUG
+    voiceCDCount--;
+    std::cout << "Calling SurgeVoice DTOR " << voiceCDCount << std::endl;
+#endif
+}
 
 void SurgeVoice::legato(int key, int velocity, char detune)
 {
@@ -350,13 +403,13 @@ void SurgeVoice::legato(int key, int velocity, char detune)
         switch (scene->portamento.porta_curve)
         {
         case porta_log:
-            phase = glide_log(state.portaphase);
+            phase = storage->glide_log(state.portaphase);
             break;
         case porta_lin:
             phase = state.portaphase;
             break;
         case porta_exp:
-            phase = glide_exp(state.portaphase);
+            phase = storage->glide_exp(state.portaphase);
             break;
         }
 
@@ -380,7 +433,7 @@ void SurgeVoice::legato(int key, int velocity, char detune)
 
 void SurgeVoice::retriggerPortaIfKeyChanged()
 {
-    if (!storage->oddsound_mts_active &&
+    if (!storage->oddsound_mts_active_as_client &&
         (storage->isStandardTuning || storage->tuningApplicationMode == SurgeStorage::RETUNE_ALL))
     {
         if (floor(state.pkey + 0.5) != state.priorpkey)
@@ -395,7 +448,8 @@ void SurgeVoice::retriggerPortaIfKeyChanged()
             return storage->currentTuning.logScaledFrequencyForMidiNote(k) * 12;
         };
 
-        if (storage->oddsound_mts_client && storage->oddsound_mts_active)
+#ifndef SURGE_SKIP_ODDSOUND_MTS
+        if (storage->oddsound_mts_client && storage->oddsound_mts_active_as_client)
         {
             v4k = [this](int k) {
                 return log2f(MTS_NoteToFrequency(storage->oddsound_mts_client, k, state.channel) /
@@ -403,6 +457,7 @@ void SurgeVoice::retriggerPortaIfKeyChanged()
                        12;
             };
         }
+#endif
 
         auto ckey = state.pkey;
         auto start = state.priorpkey - 2;
@@ -473,10 +528,16 @@ void SurgeVoice::switch_toggled()
         {
             bool nzid = scene->drift.extend_range;
             osc[i] = spawn_osc(scene->osc[i].type.val.i, storage, &scene->osc[i], localcopy,
-                               oscbuffer[i]);
+                               this->paramptrUnmod, oscbuffer[i]);
             if (osc[i])
             {
-                osc[i]->init(state.pitch, false, nzid);
+                // this matches the override in ::process_block
+                float ktrkroot = 60;
+                auto usep = noteShiftFromPitchParam(
+                    (scene->osc[i].keytrack.val.b ? state.pitch : ktrkroot + state.scenepbpitch) +
+                        octaveSize * scene->osc[i].octave.val.i,
+                    0);
+                osc[i]->init(usep, false, nzid);
             }
             osctype[i] = scene->osc[i].type.val.i;
         }
@@ -508,8 +569,9 @@ void SurgeVoice::switch_toggled()
     if (solo)
     {
         set_path(scene->solo_o1.val.b, scene->solo_o2.val.b, scene->solo_o3.val.b,
-                 FM && scene->solo_o1.val.b, // inter-osc FM should be enabled only if carrier (osc
-                                             // 1) is soloed, in case any solos are active
+                 FM && scene->solo_o1.val.b,
+                 // inter-osc FM should be enabled only if carrier (osc
+                 // 1) is soloed, in case any solos are active
                  scene->solo_ring_12.val.b, scene->solo_ring_23.val.b, scene->solo_noise.val.b);
 
         // pre-1.7.2 unique (single) solo paths:
@@ -589,47 +651,66 @@ void SurgeVoice::update_portamento()
     int quantStep = 12;
 
     if (!storage->isStandardTuning && storage->currentScale.count > 1)
+    {
         quantStep = storage->currentScale.count;
+    }
 
-    // portamento constant rate mode (multiply portamento time with every octave traversed (or scale
-    // length in case of microtuning)
+    // portamento constant rate mode (multiply portamento time with every octave traversed
+    // (or scale length in case of microtuning)
     if (scene->portamento.porta_constrate)
+    {
         const_rate_factor =
             (1.f /
              ((1.f / quantStep) * fabs(state.getPitch(storage) - state.portasrc_key) + 0.00001));
+    }
 
-    state.portaphase += envelope_rate_linear(localcopy[scene->portamento.param_id_in_scene].f) *
-                        (scene->portamento.temposync ? storage->temposyncratio : 1.f) *
-                        const_rate_factor;
+    float portaClamp = 4;
+    // more than 16 second portamento with the modulation is painful. See #7301
+    assert(scene->portamento.val_max.f < portaClamp);
+    state.portaphase +=
+        storage->envelope_rate_linear(
+            std::min(localcopy[scene->portamento.param_id_in_scene].f, portaClamp)) *
+        (scene->portamento.temposync ? storage->temposyncratio : 1.f) * const_rate_factor;
 
-    if (state.portaphase < 1)
+    if ((state.portaphase < 1) &&
+        (localcopy[scene->portamento.param_id_in_scene].f > scene->portamento.val_min.f))
     {
         // exponential or linear key traversal for the portamento
         float phase;
         switch (scene->portamento.porta_curve)
         {
         case porta_log:
-            phase = glide_log(state.portaphase);
+            phase = storage->glide_log(state.portaphase);
             break;
         case porta_lin:
             phase = state.portaphase;
             break;
         case porta_exp:
-            phase = glide_exp(state.portaphase);
+            phase = storage->glide_exp(state.portaphase);
             break;
         }
 
         state.pkey = (1.f - phase) * state.portasrc_key + (float)phase * state.getPitch(storage);
 
-        if (scene->portamento.porta_gliss) // quantize portamento to keys
+        // quantize portamento to keys
+        if (scene->portamento.porta_gliss)
+        {
             state.pkey = floor(state.pkey + 0.5);
+        }
 
         state.porta_doretrigger = false;
+
         if (scene->portamento.porta_retrigger)
+        {
             retriggerPortaIfKeyChanged();
+        }
     }
     else
+    {
         state.pkey = state.getPitch(storage);
+    }
+
+    state.pkey += noteExpressions[PITCH];
 }
 
 int SurgeVoice::routefilter(int r)
@@ -650,12 +731,14 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
 {
     // Always process LFO1 so the gate retrigger always work
     lfo[0].process_block();
+    velocitySource.process_block();
 
     for (int i = 0; i < n_lfos_voice; i++)
     {
         if (scene->lfo[i].shape.val.i == lt_formula)
         {
-            Surge::Formula::setupEvaluatorStateFrom(lfo[i].formulastate, storage->getPatch());
+            Surge::Formula::setupEvaluatorStateFrom(lfo[i].formulastate, storage->getPatch(),
+                                                    state.scene_id);
             Surge::Formula::setupEvaluatorStateFrom(lfo[i].formulastate, this);
         }
 
@@ -665,15 +748,28 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
         }
     }
 
+    auto pm = scene->polymode.val.i;
+
+    bool fromCurrent = (pm == pm_poly && scene->polyVoiceRepeatedKeyMode ==
+                                             PolyVoiceRepeatedKeyMode::ONE_VOICE_PER_KEY) ||
+                       (pm != pm_poly &&
+                        scene->monoVoiceEnvelopeMode == MonoVoiceEnvelopeMode::RESTART_FROM_LATEST);
+
     for (int i = 0; i < n_lfos_voice; ++i)
     {
         if (lfo[i].retrigger_AEG)
         {
-            ((ADSRModulationSource *)modsources[ms_ampeg])->retrigger();
+            auto ms = ((ADSRModulationSource *)modsources[ms_ampeg]);
+            auto val = fromCurrent * ms->get_output(0);
+
+            ms->retriggerFrom(val);
         }
         if (lfo[i].retrigger_FEG)
         {
-            ((ADSRModulationSource *)modsources[ms_filtereg])->retrigger();
+            auto ms = ((ADSRModulationSource *)modsources[ms_filtereg]);
+            auto val = fromCurrent * ms->get_output(0);
+
+            ms->retriggerFrom(val);
         }
     }
 
@@ -685,15 +781,16 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
         state.keep_playing = false;
     }
 
-    // TODO memcpy is bottleneck
-    memcpy(localcopy, paramptr, sizeof(localcopy));
+    // TODO: memcpy is bottleneck
     // don't actually need to copy everything
-    // LFOs could be ignore when unused
+    // LFOs could be ignored when unused
     // same for FX & OSCs
-    // also ignore int-parameters
+    // also ignore integer parameters
+    memcpy(localcopy, paramptr, sizeof(localcopy));
 
     applyModulationToLocalcopy();
     update_portamento();
+
     if (state.porta_doretrigger)
     {
         state.porta_doretrigger = false;
@@ -702,6 +799,7 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     }
 
     float pb = modsources[ms_pitchbend]->get_output(0);
+
     if (pb > 0)
         pb *= (float)scene->pbrange_up.val.i * (scene->pbrange_up.extend_range ? 0.01f : 1.f);
     else
@@ -721,8 +819,12 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
 
     if (scene->modsource_doprocess[ms_polyaftertouch])
     {
+        auto addl = 0.0;
+        if (!mpeEnabled)
+            addl = noteExpressions[PRESSURE];
         ((ControllerModulationSource *)modsources[ms_polyaftertouch])
             ->set_target(
+                addl +
                 storage->poly_aftertouch[state.scene_id & 1][state.channel & 15][state.key & 127]);
         ((ControllerModulationSource *)modsources[ms_polyaftertouch])->process_block();
     }
@@ -733,7 +835,7 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     float on = amp_to_linear(localcopy[lag_id[le_noise]].f);
     float r12 = amp_to_linear(localcopy[lag_id[le_ring12]].f);
     float r23 = amp_to_linear(localcopy[lag_id[le_ring23]].f);
-    float pfg = db_to_linear(localcopy[lag_id[le_pfg]].f);
+    float pfg = storage->db_to_linear(localcopy[lag_id[le_pfg]].f);
 
     osclevels[le_osc1].set_target(o1);
     osclevels[le_osc2].set_target(o2);
@@ -751,11 +853,13 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     route[5] = routefilter(scene->route_noise.val.i);
 
     float pan1 = limit_range(localcopy[pan_id].f + state.voiceChannelState->pan +
-                                 state.mainChannelState->pan,
+                                 state.mainChannelState->pan + (noteExpressions[PAN] * 2 - 1),
                              -1.f, 1.f);
     float amp =
         0.5f * amp_to_linear(localcopy[volume_id].f); // the *0.5 multiplication will be eliminated
                                                       // by the 2x gain of the halfband filter
+
+    amp = amp * noteExpressions[VOLUME]; // since amp is already linear as is the NE
 
     // Volume correcting/correction (fc_stereo updated since v1.2.2)
     if (scene->filterblock_configuration.val.i == fc_wide)
@@ -766,8 +870,12 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
     if ((scene->filterblock_configuration.val.i == fc_stereo) ||
         (scene->filterblock_configuration.val.i == fc_wide))
     {
+        // I am surprised this is not pan1 - as oppsoed to pan_id - so will change it
+        // pan1 -= localcopy[width_id].f;
+        // float pan2 = localcopy[pan_id].f + localcopy[width_id].f;
+        float pan2 = pan1 + localcopy[width_id].f;
         pan1 -= localcopy[width_id].f;
-        float pan2 = localcopy[pan_id].f + localcopy[width_id].f;
+
         float amp2L = amp * megapanL(pan2);
         float amp2R = amp * megapanR(pan2);
         if (Q)
@@ -799,7 +907,119 @@ template <bool first> void SurgeVoice::calc_ctrldata(QuadFilterChainState *Q, in
 void SurgeVoice::sampleRateReset()
 {
     for (auto &cm : CM)
-        cm.setSampleRateAndBlockSize((float)dsamplerate_os, BLOCK_SIZE_OS);
+        cm.setSampleRateAndBlockSize((float)storage->dsamplerate_os, BLOCK_SIZE_OS);
+}
+
+inline void all_ring_modes_block(float *__restrict src1_l, float *__restrict src2_l,
+                                 float *__restrict src1_r, float *__restrict src2_r,
+                                 float *__restrict dst_l, float *__restrict dst_r, bool is_wide,
+                                 int mode, lipol_ps osclevels, unsigned int nquads)
+{
+    if (is_wide)
+    {
+        switch (mode)
+        {
+        case CombinatorMode::cxm_ring:
+            mech::mul_block<BLOCK_SIZE_OS>(src1_l, src2_l, dst_l);
+            mech::mul_block<BLOCK_SIZE_OS>(src1_r, src2_r, dst_r);
+            break;
+        case CombinatorMode::cxm_cxor43_0:
+            cxor43_0_block(src1_l, src2_l, dst_l, nquads);
+            cxor43_0_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_1:
+            cxor43_1_block(src1_l, src2_l, dst_l, nquads);
+            cxor43_1_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_2:
+            cxor43_2_block(src1_l, src2_l, dst_l, nquads);
+            cxor43_2_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_3_legacy:
+            cxor43_3_legacy_block(src1_l, src2_l, dst_l, nquads);
+            cxor43_3_legacy_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_4_legacy:
+            cxor43_4_legacy_block(src1_l, src2_l, dst_l, nquads);
+            cxor43_4_legacy_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_3:
+            cxor43_3_block(src1_l, src2_l, dst_l, nquads);
+            cxor43_3_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_4:
+            cxor43_4_block(src1_l, src2_l, dst_l, nquads);
+            cxor43_4_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_0:
+            cxor93_0_block(src1_l, src2_l, dst_l, nquads);
+            cxor93_0_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_1:
+            cxor93_1_block(src1_l, src2_l, dst_l, nquads);
+            cxor93_1_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_2:
+            cxor93_2_block(src1_l, src2_l, dst_l, nquads);
+            cxor93_2_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_3:
+            cxor93_3_block(src1_l, src2_l, dst_l, nquads);
+            cxor93_3_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_4:
+            cxor93_4_block(src1_l, src2_l, dst_l, nquads);
+            cxor93_4_block(src1_r, src2_r, dst_r, nquads);
+            break;
+        }
+        osclevels.multiply_2_blocks(dst_l, dst_r, nquads);
+    }
+    else
+    {
+        switch (mode)
+        {
+        case CombinatorMode::cxm_ring:
+            mech::mul_block<BLOCK_SIZE_OS>(src1_l, src2_l, dst_l);
+            break;
+        case CombinatorMode::cxm_cxor43_0:
+            cxor43_0_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_1:
+            cxor43_1_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_2:
+            cxor43_2_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_3_legacy:
+            cxor43_3_legacy_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_4_legacy:
+            cxor43_4_legacy_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_3:
+            cxor43_3_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor43_4:
+            cxor43_4_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_0:
+            cxor93_0_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_1:
+            cxor93_1_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_2:
+            cxor93_2_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_3:
+            cxor93_3_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        case CombinatorMode::cxm_cxor93_4:
+            cxor93_4_block(src1_l, src2_l, dst_l, nquads);
+            break;
+        }
+        osclevels.multiply_block(dst_l, nquads);
+    }
 }
 
 bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
@@ -811,12 +1031,13 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
     float *tblockR = is_wide ? tblock2 : tblock;
 
     // float ktrkroot = (float)scene->keytrack_root.val.i;
+    // this mysterious override is duplicated in the ->init calls
     float ktrkroot = 60;
     float drift = localcopy[scene->drift.param_id_in_scene].f;
 
     // clear output
-    clear_block(output[0], BLOCK_SIZE_OS_QUAD);
-    clear_block(output[1], BLOCK_SIZE_OS_QUAD);
+    mech::clear_block<BLOCK_SIZE_OS>(output[0]);
+    mech::clear_block<BLOCK_SIZE_OS>(output[1]);
 
     for (int i = 0; i < n_oscs; ++i)
     {
@@ -850,11 +1071,11 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
 
             if (route[2] < 2)
             {
-                accumulate_block(tblock, output[0], BLOCK_SIZE_OS_QUAD);
+                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
             }
             if (route[2] > 0)
             {
-                accumulate_block(tblockR, output[1], BLOCK_SIZE_OS_QUAD);
+                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
             }
         }
     }
@@ -868,7 +1089,8 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
                     (scene->osc[1].keytrack.val.b ? state.pitch : ktrkroot + state.scenepbpitch) +
                         octaveSize * scene->osc[1].octave.val.i,
                     1),
-                drift, is_wide, true, db_to_linear(localcopy[scene->fm_depth.param_id_in_scene].f));
+                drift, is_wide, true,
+                storage->db_to_linear(localcopy[scene->fm_depth.param_id_in_scene].f));
         }
         else
         {
@@ -894,11 +1116,11 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
 
             if (route[1] < 2)
             {
-                accumulate_block(tblock, output[0], BLOCK_SIZE_OS_QUAD);
+                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
             }
             if (route[1] > 0)
             {
-                accumulate_block(tblockR, output[1], BLOCK_SIZE_OS_QUAD);
+                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
             }
         }
     }
@@ -907,13 +1129,14 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
     {
         if (FMmode == fm_2and3to1)
         {
-            add_block(osc[1]->output, osc[2]->output, fmbuffer, BLOCK_SIZE_OS_QUAD);
+            mech::add_block<BLOCK_SIZE_OS>(osc[1]->output, osc[2]->output, fmbuffer);
             osc[0]->process_block(
                 noteShiftFromPitchParam(
                     (scene->osc[0].keytrack.val.b ? state.pitch : ktrkroot + state.scenepbpitch) +
                         octaveSize * scene->osc[0].octave.val.i,
                     0),
-                drift, is_wide, true, db_to_linear(localcopy[scene->fm_depth.param_id_in_scene].f));
+                drift, is_wide, true,
+                storage->db_to_linear(localcopy[scene->fm_depth.param_id_in_scene].f));
         }
         else if (FMmode)
         {
@@ -922,7 +1145,8 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
                     (scene->osc[0].keytrack.val.b ? state.pitch : ktrkroot + state.scenepbpitch) +
                         octaveSize * scene->osc[0].octave.val.i,
                     0),
-                drift, is_wide, true, db_to_linear(localcopy[scene->fm_depth.param_id_in_scene].f));
+                drift, is_wide, true,
+                storage->db_to_linear(localcopy[scene->fm_depth.param_id_in_scene].f));
         }
         else
         {
@@ -948,76 +1172,69 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
 
             if (route[0] < 2)
             {
-                accumulate_block(tblock, output[0], BLOCK_SIZE_OS_QUAD);
+                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
             }
             if (route[0] > 0)
             {
-                accumulate_block(tblockR, output[1], BLOCK_SIZE_OS_QUAD);
+                mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
             }
         }
     }
 
     if (ring12)
     {
-        if (is_wide)
-        {
-            mul_block(osc[0]->output, osc[1]->output, tblock, BLOCK_SIZE_OS_QUAD);
-            mul_block(osc[0]->outputR, osc[1]->outputR, tblockR, BLOCK_SIZE_OS_QUAD);
-            osclevels[le_ring12].multiply_2_blocks(tblock, tblockR, BLOCK_SIZE_OS_QUAD);
-        }
-        else
-        {
-            mul_block(osc[0]->output, osc[1]->output, tblock, BLOCK_SIZE_OS_QUAD);
-            osclevels[le_ring12].multiply_block(tblock, BLOCK_SIZE_OS_QUAD);
-        }
+        all_ring_modes_block(osc[0]->output, osc[1]->output, osc[0]->outputR, osc[1]->outputR,
+                             tblock, tblockR, is_wide, scene->level_ring_12.deform_type,
+                             osclevels[le_ring12], BLOCK_SIZE_OS_QUAD);
 
         if (route[3] < 2)
         {
-            accumulate_block(tblock, output[0], BLOCK_SIZE_OS_QUAD);
+            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
         }
         if (route[3] > 0)
         {
-            accumulate_block(tblockR, output[1], BLOCK_SIZE_OS_QUAD);
+            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
         }
     }
 
     if (ring23)
     {
-        if (is_wide)
-        {
-            mul_block(osc[1]->output, osc[2]->output, tblock, BLOCK_SIZE_OS_QUAD);
-            mul_block(osc[1]->outputR, osc[2]->outputR, tblockR, BLOCK_SIZE_OS_QUAD);
-            osclevels[le_ring23].multiply_2_blocks(tblock, tblockR, BLOCK_SIZE_OS_QUAD);
-        }
-        else
-        {
-            mul_block(osc[1]->output, osc[2]->output, tblock, BLOCK_SIZE_OS_QUAD);
-            osclevels[le_ring23].multiply_block(tblock, BLOCK_SIZE_OS_QUAD);
-        }
+        all_ring_modes_block(osc[1]->output, osc[2]->output, osc[1]->outputR, osc[2]->outputR,
+                             tblock, tblockR, is_wide, scene->level_ring_23.deform_type,
+                             osclevels[le_ring23], BLOCK_SIZE_OS_QUAD);
 
         if (route[4] < 2)
         {
-            accumulate_block(tblock, output[0], BLOCK_SIZE_OS_QUAD);
+            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
         }
         if (route[4] > 0)
         {
-            accumulate_block(tblockR, output[1], BLOCK_SIZE_OS_QUAD);
+            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
         }
     }
 
     if (noise)
     {
         float noisecol = limit_range(localcopy[scene->noise_colour.param_id_in_scene].f, -1.f, 1.f);
+        auto is_stereo_noise = scene->noise_colour.deform_type == NoiseColorChannels::STEREO;
         for (int i = 0; i < BLOCK_SIZE_OS; i += 2)
         {
-            ((float *)tblock)[i] =
-                correlated_noise_o2mk2_storagerng(noisegenL[0], noisegenL[1], noisecol, storage);
+            ((float *)tblock)[i] = sdsp::correlated_noise_o2mk2_supplied_value(
+                noisegenL[0], noisegenL[1], noisecol, storage->rand_pm1());
             ((float *)tblock)[i + 1] = ((float *)tblock)[i];
             if (is_wide)
             {
-                ((float *)tblockR)[i] = correlated_noise_o2mk2_storagerng(
-                    noisegenR[0], noisegenR[1], noisecol, storage);
-                ((float *)tblockR)[i + 1] = ((float *)tblockR)[i];
+                if (is_stereo_noise)
+                {
+                    ((float *)tblockR)[i] = sdsp::correlated_noise_o2mk2_supplied_value(
+                        noisegenR[0], noisegenR[1], noisecol, storage->rand_pm1());
+                    ((float *)tblockR)[i + 1] = ((float *)tblockR)[i];
+                }
+                else
+                {
+                    ((float *)tblockR)[i] = ((float *)tblock)[i];
+                    ((float *)tblockR)[i + 1] = ((float *)tblock)[i + 1];
+                }
             }
         }
 
@@ -1032,11 +1249,11 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
 
         if (route[5] < 2)
         {
-            accumulate_block(tblock, output[0], BLOCK_SIZE_OS_QUAD);
+            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblock, output[0]);
         }
         if (route[5] > 0)
         {
-            accumulate_block(tblockR, output[1], BLOCK_SIZE_OS_QUAD);
+            mech::accumulate_from_to<BLOCK_SIZE_OS>(tblockR, output[1]);
         }
     }
 
@@ -1045,8 +1262,8 @@ bool SurgeVoice::process_block(QuadFilterChainState &Q, int Qe)
 
     for (int i = 0; i < BLOCK_SIZE_OS; i++)
     {
-        _mm_store_ss(((float *)&Q.DL[i] + Qe), _mm_load_ss(&output[0][i]));
-        _mm_store_ss(((float *)&Q.DR[i] + Qe), _mm_load_ss(&output[1][i]));
+        SIMD_MM(store_ss)(((float *)&Q.DL[i] + Qe), SIMD_MM(load_ss)(&output[0][i]));
+        SIMD_MM(store_ss)(((float *)&Q.DR[i] + Qe), SIMD_MM(load_ss)(&output[1][i]));
     }
     SetQFB(&Q, Qe);
 
@@ -1102,8 +1319,9 @@ template <bool noLFOSources> void SurgeVoice::applyModulationToLocalcopy()
             iter++;
         }
 
-        monoAftertouchSource.set_target(state.voiceChannelState->pressure);
-        timbreSource.set_target(state.voiceChannelState->timbre);
+        monoAftertouchSource.set_target(state.voiceChannelState->pressure +
+                                        noteExpressions[PRESSURE]);
+        timbreSource.set_target(state.voiceChannelState->timbre + noteExpressions[TIMBRE]);
 
         if (scene->modsource_doprocess[ms_aftertouch])
         {
@@ -1117,10 +1335,39 @@ template <bool noLFOSources> void SurgeVoice::applyModulationToLocalcopy()
     }
     else
     {
-        // When not in MPE mode, channel aftertouch is already smoothed at scene level.
-        // Do not smooth it again, force the output to the current value.
-        monoAftertouchSource.set_output(0, state.voiceChannelState->pressure);
-        // Currently timbre only works in MPE mode, so no need to do anything when not in MPE mode.
+        /* When not in MPE mode, channel aftertouch is already smoothed at scene level.
+         * Do not smooth it again, force the output to the current value.
+         */
+        monoAftertouchSource.init(0, state.voiceChannelState->pressure);
+
+        // TimbreSource used to be ignored in non-MPE mode; now it just echose the
+        // note expression
+        timbreSource.set_target(noteExpressions[TIMBRE]);
+        timbreSource.process_block();
+    }
+
+    for (int i = 0; i < paramModulationCount; ++i)
+    {
+        auto &pc = polyphonicParamModulations[i];
+        switch (pc.vt_type)
+        {
+        case vt_float:
+            localcopy[pc.param_id].f += pc.value;
+            break;
+        case vt_int:
+        {
+            auto v =
+                std::clamp((int)(round)(localcopy[pc.param_id].i + pc.value), pc.imin, pc.imax);
+            localcopy[pc.param_id].i = v;
+            break;
+        }
+        case vt_bool:
+            if (pc.value > 0.5)
+                localcopy[pc.param_id].b = true;
+            if (pc.value < 0.5)
+                localcopy[pc.param_id].b = false;
+            break;
+        }
     }
 }
 
@@ -1162,7 +1409,8 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
 
     // HERE
     float Drive = db_to_linear(scene->wsunit.drive.get_extended(localcopy[id_drive].f));
-    float Gain = db_to_linear(localcopy[id_vca].f + localcopy[id_vcavel].f * (1.f - state.fvel)) *
+    float Gain = db_to_linear(localcopy[id_vca].f +
+                              localcopy[id_vcavel].f * (1.f - velocitySource.get_output(0))) *
                  modsources[ms_ampeg]->get_output(0);
     float FB = scene->feedback.get_extended(localcopy[id_feedback].f);
 
@@ -1170,7 +1418,9 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
     {
         // We need to initialize the waveshaper registers
         for (int c = 0; c < 2; ++c)
-            initializeWaveshaperRegister(scene->wsunit.type.val.i, FBP.WS[c].R);
+            sst::waveshapers::initializeWaveshaperRegister(
+                static_cast<sst::waveshapers::WaveshaperType>(scene->wsunit.type.val.i),
+                FBP.WS[c].R);
     }
 
     if (Q)
@@ -1188,7 +1438,7 @@ void SurgeVoice::SetQFB(QuadFilterChainState *Q, int e) // Q == 0 means init(ial
 
         for (int c = 0; c < 2; ++c)
         {
-            for (int i = 0; i < n_waveshaper_registers; ++i)
+            for (int i = 0; i < sst::waveshapers::n_waveshaper_registers; ++i)
             {
                 set1f(Q->WSS[c].R[i], e, FBP.WS[c].R[i]);
             }
@@ -1292,7 +1542,7 @@ void SurgeVoice::GetQFB()
     }
     for (int c = 0; c < 2; ++c)
     {
-        for (int i = 0; i < n_waveshaper_registers; ++i)
+        for (int i = 0; i < sst::waveshapers::n_waveshaper_registers; ++i)
         {
             FBP.WS[c].R[i] = get1f(fbq->WSS[c].R[i], fbqi);
         }
@@ -1314,4 +1564,179 @@ void SurgeVoice::freeAllocatedElements()
     {
         lfo[i].completedModulation();
     }
+}
+
+void SurgeVoice::applyPolyphonicParamModulation(Parameter *p, double value,
+                                                double underlyingMonoMod)
+{
+    // For a discussion of underlyingMonoMod please see the comment in
+    // SurgeSynthesizer::applyParameterPolyphonicModulation
+
+    // quickly do a search to see if i'm there
+    int param_id = p->param_id_in_scene;
+    for (int i = 0; i < paramModulationCount; ++i)
+    {
+        if (polyphonicParamModulations[i].param_id == param_id)
+        {
+            auto &pp = polyphonicParamModulations[i];
+            pp.vt_type = (valtypes)p->valtype;
+            switch (pp.vt_type)
+            {
+            case vt_float:
+                pp.value = value * (p->val_max.f - p->val_min.f);
+                break;
+            case vt_int:
+                pp.value = value * (p->val_max.i - p->val_min.i);
+                pp.imin = p->val_min.i;
+                pp.imax = p->val_max.i;
+                break;
+            case vt_bool:
+                pp.value = value;
+            }
+
+            pp.value -= underlyingMonoMod;
+            return;
+        }
+    }
+    int idx = paramModulationCount;
+    assert(paramModulationCount < maxPolyphonicParamModulations);
+    if (paramModulationCount < maxPolyphonicParamModulations)
+    {
+        auto &pp = polyphonicParamModulations[idx];
+        pp.param_id = param_id;
+        pp.vt_type = (valtypes)p->valtype;
+        switch (pp.vt_type)
+        {
+        case vt_float:
+            pp.value = value * (p->val_max.f - p->val_min.f);
+            break;
+        case vt_int:
+            pp.value = value * (p->val_max.i - p->val_min.i);
+            pp.imin = p->val_min.i;
+            pp.imax = p->val_max.i;
+            break;
+        case vt_bool:
+            pp.value = value;
+        }
+
+        pp.value -= underlyingMonoMod;
+        paramModulationCount++;
+    }
+}
+
+void SurgeVoice::applyNoteExpression(NoteExpressionType net, float value)
+{
+    // std::cout << __func__ << _D(net) << _D(value) << std::endl;
+    if (net != UNKNOWN)
+        noteExpressions[net] = value;
+}
+
+void SurgeVoice::retriggerLFOEnvelopes()
+{
+    for (int i = 0; i < n_lfos_voice; ++i)
+    {
+        auto &anLfo = lfo[i];
+        auto &lfoData = scene->lfo[i];
+
+        if (lfoData.trigmode.val.i == lm_keytrigger)
+        {
+            anLfo.attack();
+        }
+        else
+        {
+            anLfo.retriggerEnvelope();
+        }
+    }
+
+    int ao = scene->modsources[ms_random_unipolar]->get_active_outputs();
+    rndUni.set_active_outputs(ao);
+    for (int w = 0; w < ao; ++w)
+        rndUni.set_output(w, scene->modsources[ms_random_unipolar]->get_output(w));
+
+    ao = scene->modsources[ms_random_bipolar]->get_active_outputs();
+    rndBi.set_active_outputs(ao);
+    for (int w = 0; w < ao; ++w)
+        rndBi.set_output(w, scene->modsources[ms_random_bipolar]->get_output(w));
+
+    altUni.set_output(0, scene->modsources[ms_alternate_unipolar]->get_output(0));
+    altBi.set_output(0, scene->modsources[ms_alternate_bipolar]->get_output(0));
+}
+
+void SurgeVoice::resetPortamentoFrom(int key, int channel)
+{
+    if ((scene->polymode.val.i == pm_mono_st_fp) ||
+        (scene->portamento.val.f == scene->portamento.val_min.f))
+        state.portasrc_key = state.getPitch(storage);
+    else
+    {
+        float lk = key;
+#ifndef SURGE_SKIP_ODDSOUND_MTS
+        if (storage->oddsound_mts_client && storage->oddsound_mts_active_as_client)
+        {
+            lk += MTS_RetuningInSemitones(storage->oddsound_mts_client, lk, channel);
+            state.portasrc_key = lk;
+        }
+        else
+#endif
+        {
+            if (storage->mapChannelToOctave && !mpeEnabled)
+                state.portasrc_key =
+                    channelKeyEquvialent(lk, state.channel, mpeEnabled, storage, true);
+            else
+                state.portasrc_key = storage->remapKeyInMidiOnlyMode(lk);
+        }
+    }
+    state.priorpkey = state.portasrc_key;
+    state.portaphase = 0;
+}
+
+void SurgeVoice::retriggerOSCWithIndependentAttacks()
+{
+    for (int i = 0; i < n_oscs; ++i)
+    {
+        if (osc[i])
+        {
+            // This matches the override in ::process_block
+            float ktrkroot = 60;
+            auto usep = noteShiftFromPitchParam((scene->osc[i].keytrack.val.b
+                                                     ? state.getPitch(storage)
+                                                     : ktrkroot + state.scenepbpitch) +
+                                                    octaveSize * scene->osc[i].octave.val.i,
+                                                0);
+
+            /*
+             * This is awfully special case but it's the best solution
+             */
+            if (scene->osc[i].type.val.i == ot_string)
+            {
+                osc[i]->init(usep);
+            }
+            if (scene->osc[i].type.val.i == ot_twist &&
+                !scene->osc[i].p[n_osc_params - 2].deactivated)
+            {
+                osc[i]->init(usep);
+            }
+        }
+    }
+}
+
+bool SurgeVoice::matchesChannelKeyId(int16_t channel, int16_t key, int32_t nid)
+{
+    bool chanMatch{false}, keyMatch{false}, nidMatch{false};
+    if (channel == -1)
+        chanMatch = true;
+    else
+        chanMatch = (state.channel == channel);
+
+    if (key == -1)
+        keyMatch = true;
+    else
+        keyMatch = (state.key == key);
+
+    if (nid == -1)
+        nidMatch = true;
+    else
+        nidMatch = (host_note_id == nid);
+
+    return chanMatch && keyMatch && nidMatch;
 }

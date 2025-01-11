@@ -1,19 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_COMMON_DSP_EFFECTS_CHOWDSP_SPRING_REVERB_REFLECTIONNETWORK_H
+#define SURGE_SRC_COMMON_DSP_EFFECTS_CHOWDSP_SPRING_REVERB_REFLECTIONNETWORK_H
 
 #include <array>
 
@@ -54,7 +62,7 @@ class ReflectionNetwork
             feedbackArr[i] *= 0.23f * mix * (0.735f + 0.235f * reverbSize);
         }
 
-        feedback = _mm_load_ps(feedbackArr);
+        feedback = SIMD_MM(load_ps)(feedbackArr);
 
         float dampDB = -1.0f - 9.0f * damping;
         shelfFilter.calcCoefs(1.0f, (float)dB_to_linear((double)dampDB), 800.0f, fs);
@@ -66,14 +74,14 @@ class ReflectionNetwork
         for (int i = 0; i < 4; ++i)
             output[i] = delays[i].popSample(ch);
 
-        auto outVec = _mm_load_ps(output);
+        auto outVec = SIMD_MM(load_ps)(output);
 
         // householder matrix
         constexpr auto householderFactor = -2.0f / (float)4;
         const auto sumXhh = vSum(outVec) * householderFactor;
-        outVec = _mm_add_ps(outVec, _mm_load1_ps(&sumXhh));
+        outVec = SIMD_MM(add_ps)(outVec, SIMD_MM(load1_ps)(&sumXhh));
 
-        outVec = _mm_mul_ps(outVec, feedback);
+        outVec = SIMD_MM(mul_ps)(outVec, feedback);
         return shelfFilter.processSample(vSum(outVec) / (float)4);
     }
 
@@ -90,8 +98,10 @@ class ReflectionNetwork
     std::array<ReflectionDelay, 4> delays{ReflectionDelay{1 << 18}, ReflectionDelay{1 << 18},
                                           ReflectionDelay{1 << 18}, ReflectionDelay{1 << 18}};
 
-    __m128 feedback;
+    SIMD_M128 feedback;
 
     chowdsp::ShelfFilter<> shelfFilter;
 };
 } // namespace chowdsp
+
+#endif // SURGE_SRC_COMMON_DSP_EFFECTS_CHOWDSP_SPRING_REVERB_REFLECTIONNETWORK_H
