@@ -1,25 +1,33 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_FORMULAMODULATIONHELPER_H
-#define SURGE_XT_FORMULAMODULATIONHELPER_H
+#ifndef SURGE_SRC_COMMON_DSP_MODULATORS_FORMULAMODULATIONHELPER_H
+#define SURGE_SRC_COMMON_DSP_MODULATORS_FORMULAMODULATIONHELPER_H
 
 #include "SurgeStorage.h"
 #include "StringOps.h"
 #include "LuaSupport.h"
 #include <variant>
+#include <memory>
 
 class SurgeVoice;
 
@@ -36,6 +44,7 @@ struct GlobalData
 };
 
 static constexpr int max_formula_outputs{max_lfo_indices};
+static constexpr const char *sharedTableName{"shared"};
 
 struct EvaluatorState
 {
@@ -48,7 +57,6 @@ struct EvaluatorState
     bool useEnvelope = true;
     bool isFinite = true;
 
-    bool subVoice{false}, subLfoParams{true}, subLfoEnvelope{false}, subTiming{true};
     bool subMacros[n_customcontrollers], subAnyMacro{false};
 
     float del, a, h, dec, s, r;
@@ -57,24 +65,34 @@ struct EvaluatorState
 
     bool retrigger_AEG, retrigger_FEG;
 
+    bool is_display = false;
+
     // voice features
     bool isVoice;
-    int key{60}, channel{0}, velocity{0};
+    int key{60}, channel{0}, velocity{0}, releasevelocity{0}, mpebendrange{24};
+    int64_t voiceOrderAtCreate{1L};
+    float polyat{0}, mpebend{0}, mpetimbre{0}, mpepressure{0};
 
-    // patch features
+    // scene features
+    int polylimit{1}, scenemode{0}, polymode{0}, splitpoint{0};
     float macrovalues[n_customcontrollers];
+    float pitchbend, pbrange_up, pbrange_dn, aftertouch, modwheel, breath, expression, sustain,
+        lowest_key, highest_key, latest_key;
 
-    std::string error;
+    std::unique_ptr<std::string> error;
     bool raisedError = false;
     void adderror(const std::string &msg)
     {
-        error += msg;
+        if (!error)
+            error = std::make_unique<std::string>();
+
+        *error += msg;
         raisedError = true;
     }
 
     int activeoutputs;
 
-    lua_State *L; // This is assigned by prepareForEvaluation to be one per thread
+    lua_State *L{nullptr}; // This is assigned by prepareForEvaluation to be one per thread
 };
 
 void setupStorage(SurgeStorage *s);
@@ -86,11 +104,11 @@ void removeFunctionsAssociatedWith(SurgeStorage *,
 bool prepareForEvaluation(SurgeStorage *storage, FormulaModulatorStorage *fs, EvaluatorState &s,
                           bool is_display);
 
-void setupEvaluatorStateFrom(EvaluatorState &s, const SurgePatch &p);
+void setupEvaluatorStateFrom(EvaluatorState &s, const SurgePatch &patch, int sceneIndex);
 void setupEvaluatorStateFrom(EvaluatorState &s, const SurgeVoice *v);
 
 void valueAt(int phaseIntPart, float phaseFracPart, SurgeStorage *, FormulaModulatorStorage *fs,
-             EvaluatorState *state, float output[max_formula_outputs]);
+             EvaluatorState *state, float output[max_formula_outputs], bool justSetup = false);
 
 struct DebugRow
 {
@@ -113,8 +131,8 @@ std::vector<DebugRow> createDebugDataOfModState(const EvaluatorState &s);
 std::string createDebugViewOfModState(const EvaluatorState &s);
 
 /*
- * Our test harness wants to send bits of lua to the modstate to get results out for
- * regtests. Send a function query(modstate) which returns something leaf like
+ * Our test harness wants to send bits of lua to the modulator state to get results out for
+ * regtests. Send a function query(state) which returns something leaf like
  */
 std::variant<float, std::string, bool> runOverModStateForTesting(const std::string &query,
                                                                  const EvaluatorState &s);

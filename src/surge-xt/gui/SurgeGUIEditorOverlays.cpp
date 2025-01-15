@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SurgeGUIEditor.h"
 
@@ -21,10 +28,15 @@
 #include "overlays/LuaEditors.h"
 #include "overlays/TuningOverlays.h"
 #include "overlays/WaveShaperAnalysis.h"
+#include "overlays/FilterAnalysis.h"
+#include "overlays/Oscilloscope.h"
 #include "overlays/OverlayWrapper.h"
+#include "overlays/KeyBindingsOverlay.h"
+#include "overlays/OpenSoundControlSettings.h"
 #include "widgets/MainFrame.h"
 #include "widgets/WaveShaperSelector.h"
 #include "UserDefaults.h"
+#include "SurgeSynthEditor.h"
 
 std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::makeStorePatchDialog()
 {
@@ -35,6 +47,7 @@ std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::makeStorePatc
     std::string name = synth->storage.getPatch().name;
     std::string category = synth->storage.getPatch().category;
     std::string author = synth->storage.getPatch().author;
+    std::string license = synth->storage.getPatch().license;
     std::string comments = synth->storage.getPatch().comment;
 
     auto defaultAuthor = Surge::Storage::getUserDefaultValue(
@@ -85,14 +98,17 @@ std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::makeStorePatc
     pb->setSkin(currentSkin);
     pb->setName(name);
     pb->setAuthor(author);
+    pb->setLicense(license);
     pb->setCategory(category);
     pb->setComment(comments);
     pb->setTags(synth->storage.getPatch().tags);
     pb->setSurgeGUIEditor(this);
     pb->setStorage(&(this->synth->storage));
+    pb->setStoreTuningInPatch(this->synth->storage.getPatch().patchTuning.tuningStoredInPatch);
 
     // since it is now modal center in the window
     auto posRect = skinCtrl->getRect().withCentre(frame->getBounds().getCentre());
+
     pb->setEnclosingParentTitle("Save Patch");
     pb->setEnclosingParentPosition(posRect);
     pb->setHasIndependentClose(false);
@@ -146,11 +162,12 @@ std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::createOverlay
 
         jassert(false); // Make a key for me please!
 
-        pt->setCanTearOut({true, Surge::Storage::nKeys});
+        pt->setCanTearOut(
+            {true, Surge::Storage::nKeys, Surge::Storage::nKeys, Surge::Storage::nKeys});
 
         return pt;
     }
-    break;
+
     case MSEG_EDITOR:
     {
         auto lfo_id = modsource_editor[current_scene] - ms_lfo1;
@@ -186,7 +203,7 @@ std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::createOverlay
         auto ms = &synth->storage.getPatch().msegs[current_scene][lfo_id];
         auto mse = std::make_unique<Surge::Overlays::MSEGEditor>(
             &(synth->storage), lfodata, ms, &msegEditState[current_scene][lfo_id], currentSkin,
-            bitmapStore);
+            bitmapStore, this);
 
         mse->onModelChanged = [this]() {
             if (lfoDisplayRepaintCountdown == 0)
@@ -200,13 +217,17 @@ std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::createOverlay
         Surge::Storage::findReplaceSubstring(title, std::string("LFO"), std::string("MSEG"));
 
         mse->setEnclosingParentTitle(title);
-        mse->setCanTearOut({true, Surge::Storage::MSEGOverlayLocationTearOut});
+        mse->setCanTearOut({true, Surge::Storage::MSEGOverlayLocationTearOut,
+                            Surge::Storage::MSEGOverlayTearOutAlwaysOnTop,
+                            Surge::Storage::MSEGOverlayTearOutAlwaysOnTop_Plugin});
+        mse->setCanTearOutResize({true, Surge::Storage::MSEGOverlaySizeTearOut});
+        mse->setMinimumSize(600, 250);
         locationGet(mse.get(), Surge::Skin::Connector::NonParameterConnection::MSEG_EDITOR_WINDOW,
                     Surge::Storage::MSEGOverlayLocation);
 
         return mse;
     }
-    break;
+
     case FORMULA_EDITOR:
     {
         auto lfo_id = modsource_editor[current_scene] - ms_lfo1;
@@ -247,16 +268,78 @@ std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::createOverlay
 
         fme->setSkin(currentSkin, bitmapStore);
         fme->setEnclosingParentTitle(title);
-        fme->setCanTearOut({true, Surge::Storage::FormulaOverlayLocationTearOut});
+        fme->setCanTearOut({true, Surge::Storage::FormulaOverlayLocationTearOut,
+                            Surge::Storage::FormulaOverlayTearOutAlwaysOnTop,
+                            Surge::Storage::FormulaOverlayTearOutAlwaysOnTop_Plugin});
+        fme->setCanTearOutResize({true, Surge::Storage::FormulaOverlaySizeTearOut});
+        fme->setMinimumSize(500, 250);
         locationGet(fme.get(),
                     Surge::Skin::Connector::NonParameterConnection::FORMULA_EDITOR_WINDOW,
                     Surge::Storage::FormulaOverlayLocation);
 
         return fme;
     }
+
+    case WT_EDITOR:
+    {
+
+        auto os = &synth->storage.getPatch().scene[current_scene].osc[current_osc[current_scene]];
+
+        if (!os)
+        {
+            return nullptr;
+        }
+
+        auto wtse = std::make_unique<Surge::Overlays::WavetableScriptEditor>(
+            this, &(this->synth->storage), os, current_osc[current_scene], current_scene,
+            currentSkin);
+
+        std::string title = fmt::format("Osc {} Wavetable Editor", current_osc[current_scene] + 1);
+
+        wtse->setSkin(currentSkin, bitmapStore);
+        wtse->setEnclosingParentTitle(title);
+        wtse->setCanTearOut({true, Surge::Storage::WTScriptOverlayLocationTearOut,
+                             Surge::Storage::WTScriptOverlayTearOutAlwaysOnTop,
+                             Surge::Storage::WTScriptOverlayTearOutAlwaysOnTop_Plugin});
+        wtse->setCanTearOutResize({true, Surge::Storage::WTScriptOverlaySizeTearOut});
+        wtse->setMinimumSize(500, 400);
+        locationGet(wtse.get(), Surge::Skin::Connector::NonParameterConnection::WT_EDITOR_WINDOW,
+                    Surge::Storage::WTScriptOverlayLocation);
+
+        return wtse;
+    }
+
     case SAVE_PATCH:
-        return makeStorePatchDialog();
-        break;
+    {
+        if (synth->storage.userDataPathValid)
+        {
+            return makeStorePatchDialog();
+        }
+        else
+        {
+            messageBox("Documents Folder Not Writable",
+                       "You have a non-writable User Data Path; patch saving is not available");
+            return nullptr;
+        }
+    }
+
+    case OPEN_SOUND_CONTROL_SETTINGS:
+    {
+        auto te = std::make_unique<Surge::Overlays::OpenSoundControlSettings>();
+
+        te->setStorage(&(this->synth->storage));
+        te->setSurgeGUIEditor(this);
+        te->setSkin(currentSkin, bitmapStore);
+        te->setEnclosingParentTitle("Open Sound Control Settings");
+
+        auto posRect =
+            juce::Rectangle<int>(0, 0, 300, 140).withCentre(frame->getBounds().getCentre());
+
+        te->setEnclosingParentPosition(posRect);
+
+        return te;
+    }
+
     case TUNING_EDITOR:
     {
         auto te = std::make_unique<Surge::Overlays::TuningOverlay>();
@@ -266,99 +349,138 @@ std::unique_ptr<Surge::Overlays::OverlayComponent> SurgeGUIEditor::createOverlay
         te->setSkin(currentSkin, bitmapStore);
         te->setTuning(synth->storage.currentTuning);
         te->setEnclosingParentTitle("Tuning Editor");
-        te->setCanTearOut({true, Surge::Storage::TuningOverlayLocationTearOut});
+        te->setCanTearOut({true, Surge::Storage::TuningOverlayLocationTearOut,
+                           Surge::Storage::TuningOverlayTearOutAlwaysOnTop,
+                           Surge::Storage::TuningOverlayTearOutAlwaysOnTop_Plugin});
+        te->setCanTearOutResize({true, Surge::Storage::TuningOverlaySizeTearOut});
+        te->setMinimumSize(730, 400);
         locationGet(te.get(), Surge::Skin::Connector::NonParameterConnection::TUNING_EDITOR_WINDOW,
                     Surge::Storage::TuningOverlayLocation);
 
         return te;
     }
-    break;
-    case WAVETABLESCRIPTING_EDITOR:
-    {
-        int w = 800, h = 520;
-        auto px = (getWindowSizeX() - w) / 2;
-        auto py = (getWindowSizeY() - h) / 2;
-        auto r = juce::Rectangle<int>(px, py, w, h);
-
-        auto os = &synth->storage.getPatch().scene[current_scene].osc[current_osc[current_scene]];
-
-        auto pt = std::make_unique<Surge::Overlays::WavetableEquationEditor>(
-            this, &(this->synth->storage), os, currentSkin);
-        pt->setSkin(currentSkin, bitmapStore);
-        pt->setEnclosingParentPosition(juce::Rectangle<int>(px, py, w, h));
-        pt->setEnclosingParentTitle("Wavetable Script Editor");
-        return pt;
-    }
-    break;
 
     case WAVESHAPER_ANALYZER:
     {
-        auto pt = std::make_unique<Surge::Overlays::WaveShaperAnalysis>(&(this->synth->storage));
-        pt->setSkin(currentSkin, bitmapStore);
+        auto wsa =
+            std::make_unique<Surge::Overlays::WaveShaperAnalysis>(this, &(this->synth->storage));
 
-        auto npc = Surge::Skin::Connector::NonParameterConnection::ANALYZE_WAVESHAPE;
-        auto conn = Surge::Skin::Connector::connectorByNonParameterConnection(npc);
-        auto skinCtrl = currentSkin->getOrCreateControlForConnector(conn);
-        auto b = skinCtrl->getRect();
+        locationGet(wsa.get(),
+                    Surge::Skin::Connector::NonParameterConnection::WAVESHAPER_ANALYSIS_WINDOW,
+                    Surge::Storage::WSAnalysisOverlayLocation);
 
-        auto w = 300;
-        auto h = 160;
+        wsa->setSkin(currentSkin, bitmapStore);
+        wsa->setEnclosingParentTitle("Waveshaper Analysis");
+        wsa->setWSType(synth->storage.getPatch().scene[current_scene].wsunit.type.val.i);
+        wsa->setCanTearOut({true, Surge::Storage::WSAnalysisOverlayLocationTearOut,
+                            Surge::Storage::WSAnalysisOverlayTearOutAlwaysOnTop,
+                            Surge::Storage::WSAnalysisOverlayTearOutAlwaysOnTop_Plugin});
+        wsa->setCanTearOutResize({true, Surge::Storage::WSAnalysisOverlaySizeTearOut});
+        wsa->setMinimumSize(300, 160);
 
-        auto c = b.getCentreX() - w / 2;
-        auto p = juce::Rectangle<int>(0, 0, w, h).withX(c).withY(b.getBottom() + 2);
-
-        auto dl = p.getTopLeft();
-
-        int sentinel = -1000004;
-        auto ploc = Surge::Storage::getUserDefaultValue(&(synth->storage),
-                                                        Surge::Storage::WSAnalysisOverlayLocation,
-                                                        std::make_pair(sentinel, sentinel));
-        if (ploc.first != sentinel && ploc.second != sentinel)
-        {
-            p = juce::Rectangle<int>(ploc.first, ploc.second, w, h);
-        }
-
-        pt->setEnclosingParentPosition(p);
-        pt->setEnclosingParentTitle("Waveshaper Preview");
-        pt->setWSType(synth->storage.getPatch().scene[current_scene].wsunit.type.val.i);
-        pt->defaultLocation = dl;
-        pt->setCanMoveAround(std::make_pair(true, Surge::Storage::WSAnalysisOverlayLocation));
-
-        return pt;
+        return wsa;
     }
-    break;
+
+    case FILTER_ANALYZER:
+    {
+        auto fa = std::make_unique<Surge::Overlays::FilterAnalysis>(this, &(this->synth->storage),
+                                                                    this->synth);
+
+        locationGet(fa.get(),
+                    Surge::Skin::Connector::NonParameterConnection::FILTER_ANALYSIS_WINDOW,
+                    Surge::Storage::FilterAnalysisOverlayLocation);
+
+        fa->setSkin(currentSkin, bitmapStore);
+        fa->setEnclosingParentTitle("Filter Analysis");
+        fa->setCanTearOut({true, Surge::Storage::FilterAnalysisOverlayLocationTearOut,
+                           Surge::Storage::FilterAnalysisOverlayTearOutAlwaysOnTop,
+                           Surge::Storage::FilterAnalysisOverlayTearOutAlwaysOnTop_Plugin});
+        fa->setCanTearOutResize({true, Surge::Storage::FilterAnalysisOverlaySizeTearOut});
+        fa->setMinimumSize(300, 200);
+
+        return fa;
+    }
+
+    case OSCILLOSCOPE:
+    {
+        auto scope = std::make_unique<Surge::Overlays::Oscilloscope>(this, &(this->synth->storage));
+
+        locationGet(scope.get(),
+                    Surge::Skin::Connector::NonParameterConnection::OSCILLOSCOPE_WINDOW,
+                    Surge::Storage::OscilloscopeOverlayLocation);
+
+        scope->setSkin(currentSkin, bitmapStore);
+        scope->setEnclosingParentTitle("Oscilloscope");
+        scope->setCanTearOut({true, Surge::Storage::OscilloscopeOverlayLocationTearOut,
+                              Surge::Storage::OscilloscopeOverlayTearOutAlwaysOnTop,
+                              Surge::Storage::OscilloscopeOverlayTearOutAlwaysOnTop_Plugin});
+        scope->setCanTearOutResize({true, Surge::Storage::OscilloscopeOverlaySizeTearOut});
+        scope->setMinimumSize(500, 300);
+
+        return scope;
+    }
 
     case MODULATION_EDITOR:
     {
         auto me = std::make_unique<Surge::Overlays::ModulationEditor>(this, this->synth);
         me->setEnclosingParentTitle("Modulation List");
-        me->setCanTearOut({true, Surge::Storage::ModlistOverlayLocationTearOut});
+        me->setCanTearOut({true, Surge::Storage::ModlistOverlayLocationTearOut,
+                           Surge::Storage::ModlistOverlayTearOutAlwaysOnTop,
+                           Surge::Storage::ModlistOverlayTearOutAlwaysOnTop_Plugin});
+        me->setCanTearOutResize({true, Surge::Storage::ModlistOverlaySizeTearOut});
+        me->setMinimumSize(600, 300);
         me->setSkin(currentSkin, bitmapStore);
         locationGet(me.get(), Surge::Skin::Connector::NonParameterConnection::MOD_LIST_WINDOW,
                     Surge::Storage::ModlistOverlayLocation);
 
         return me;
     }
-    break;
+
+    case KEYBINDINGS_EDITOR:
+    {
+        auto kb = std::make_unique<Surge::Overlays::KeyBindingsOverlay>(&(synth->storage), this);
+        auto posRect =
+            juce::Rectangle<int>(0, 0, 500, 500).withCentre(frame->getBounds().getCentre());
+
+        kb->setSkin(currentSkin, bitmapStore);
+        kb->setEnclosingParentPosition(posRect);
+        kb->setEnclosingParentTitle("Keyboard Shortcut Editor");
+        kb->setHasIndependentClose(false);
+
+        return kb;
+    }
+
+    // TODO: Implement the action history overlay!
+    case ACTION_HISTORY:
+    {
+        return nullptr;
+    }
+
     default:
         break;
     }
+
     return nullptr;
 }
+
 void SurgeGUIEditor::showOverlay(OverlayTags olt,
                                  std::function<void(Surge::Overlays::OverlayComponent *)> setup)
 {
     auto ol = createOverlay(olt);
+
     if (!ol)
     {
         juceOverlays.erase(olt);
         return;
     }
+
+    setup(ol.get());
+
     // copy these before the std::move below
     auto t = ol->getEnclosingParentTitle();
     auto r = ol->getEnclosingParentPosition();
     auto c = ol->getHasIndependentClose();
-    setup(ol.get());
+    bool wantsInitialKeyboardFocus = ol->wantsInitialKeyboardFocus();
 
     std::function<void()> onClose = []() {};
     bool isModal = false;
@@ -387,15 +509,20 @@ void SurgeGUIEditor::showOverlay(OverlayTags olt,
     case MODULATION_EDITOR:
         onClose = [this]() { frame->repaint(); };
         break;
+    case FILTER_ANALYZER:
     case WAVESHAPER_ANALYZER:
         onClose = [this]() { this->synth->refresh_editor = true; };
         break;
     case SAVE_PATCH:
         isModal = true;
         break;
+    case KEYBINDINGS_EDITOR:
+        isModal = true;
+        break;
     default:
         break;
     }
+
     addJuceEditorOverlay(std::move(ol), t, olt, r, c, onClose, isModal);
 
     switch (olt)
@@ -414,9 +541,28 @@ void SurgeGUIEditor::showOverlay(OverlayTags olt,
     default:
         break;
     }
+
+    if (isTornOut.find(olt) != isTornOut.end())
+    {
+        if (isTornOut[olt])
+        {
+            getOverlayWrapperIfOpen(olt)->doTearOut();
+        }
+    }
+
+    if (wantsInitialKeyboardFocus)
+    {
+        getOverlayIfOpen(olt)->grabKeyboardFocus();
+    }
 }
+
 void SurgeGUIEditor::closeOverlay(OverlayTags olt)
 {
+    auto olw = getOverlayWrapperIfOpen(olt);
+    if (olw)
+    {
+        isTornOut[olt] = olw->isTornOut();
+    }
     switch (olt)
     {
     case MSEG_EDITOR:
@@ -479,9 +625,12 @@ Surge::Overlays::OverlayWrapper *SurgeGUIEditor::addJuceEditorOverlay(
     });
 
     auto olc = dynamic_cast<Surge::Overlays::OverlayComponent *>(c.get());
+
     if (olc)
     {
         ol->setCanTearOut(olc->getCanTearOut());
+        ol->setCanTearOutResize(olc->getCanTearOutResize());
+        ol->setRetainOpenStateOnEditorRecreate(olc->getRetainOpenStateOnEditorRecreate());
     }
 
     ol->addAndTakeOwnership(std::move(c));
@@ -500,6 +649,10 @@ void SurgeGUIEditor::dismissEditorOfType(OverlayTags ofType)
 
     if (overlayConsumesKeyboard(ofType))
         vkbForward--;
+
+    auto ow = getOverlayWrapperIfOpen(ofType);
+    if (ow)
+        isTornOut[ofType] = ow->isTornOut();
 
     if (juceOverlays.find(ofType) != juceOverlays.end())
     {
@@ -601,6 +754,27 @@ void SurgeGUIEditor::rezoomOverlays()
     }
 }
 
+void SurgeGUIEditor::frontNonModalOverlays()
+{
+    std::vector<juce::Component *> frontthese;
+
+    for (auto c : frame->getChildren())
+    {
+        if (auto ol = dynamic_cast<Surge::Overlays::OverlayWrapper *>(c))
+        {
+            if (!ol->getIsModal())
+            {
+                frontthese.push_back(c);
+            }
+        }
+    }
+
+    for (auto f : frontthese)
+    {
+        f->toFront(true);
+    }
+}
+
 void SurgeGUIEditor::refreshAndMorphOverlayWithOpenClose(OverlayTags tag, OverlayTags newTag)
 {
     if (!isAnyOverlayPresent(tag))
@@ -617,8 +791,25 @@ void SurgeGUIEditor::refreshAndMorphOverlayWithOpenClose(OverlayTags tag, Overla
     /*
      * Some editors can do better than a forced open-clsoe
      */
+    auto couldRefresh = updateOverlayContentIfPresent(newTag);
+    if (!couldRefresh)
+    {
+        closeOverlay(tag);
+        showOverlay(newTag);
+        if (to)
+        {
+            olw = getOverlayWrapperIfOpen(newTag);
+            if (olw)
+                olw->doTearOut(tol);
+        }
+    }
+}
+
+bool SurgeGUIEditor::updateOverlayContentIfPresent(OverlayTags tag)
+{
+    auto olw = getOverlayWrapperIfOpen(tag);
     bool couldRefresh = true;
-    switch (newTag)
+    switch (tag)
     {
     case TUNING_EDITOR:
     {
@@ -644,20 +835,16 @@ void SurgeGUIEditor::refreshAndMorphOverlayWithOpenClose(OverlayTags tag, Overla
         updateWaveshaperOverlay();
         break;
     }
+    case FILTER_ANALYZER:
+    {
+        auto f = getOverlayIfOpen(tag);
+        if (f)
+            f->repaint();
+        break;
+    }
     default:
         couldRefresh = false;
         break;
     }
-
-    if (!couldRefresh)
-    {
-        closeOverlay(tag);
-        showOverlay(newTag);
-        if (to)
-        {
-            olw = getOverlayWrapperIfOpen(newTag);
-            if (olw)
-                olw->doTearOut(tol);
-        }
-    }
+    return couldRefresh;
 }

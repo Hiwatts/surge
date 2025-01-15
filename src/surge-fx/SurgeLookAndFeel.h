@@ -1,4 +1,24 @@
-// -*- mode: c++-mode -*-
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "version.h"
 
@@ -19,9 +39,6 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
         orange,
         orangeMedium,
         orangeDark,
-        blue,
-        black,
-        white,
 
         knobEdge,
         knobBg,
@@ -51,11 +68,27 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
     {
         juce::Colour surgeGrayBg = juce::Colour(205, 206, 212);
         juce::Colour surgeOrange = juce::Colour(255, 144, 0);
-        juce::Colour surgeBlue = juce::Colour(18, 52, 99);
-        juce::Colour white = juce::Colour(255, 255, 255);
-        juce::Colour black = juce::Colour(0, 0, 0);
+        juce::Colour white = juce::Colours::white;
+        juce::Colour black = juce::Colours::black;
         juce::Colour surgeOrangeDark = juce::Colour(101, 50, 3);
         juce::Colour surgeOrangeMedium = juce::Colour(227, 112, 8);
+        juce::Colour fxStandaloneGray1 = juce::Colour(32, 32, 32);
+        juce::Colour fxStandaloneGray2 = juce::Colour(48, 48, 48);
+        juce::Colour fxStandaloneGray3 = juce::Colour(128, 128, 128);
+        juce::Colour fxStandaloneGray4 = juce::Colour(212, 212, 212);
+
+        // TODO: Why don't these work?!
+        setColour(juce::DocumentWindow::backgroundColourId, fxStandaloneGray2);
+        setColour(juce::ComboBox::backgroundColourId, fxStandaloneGray1);
+        setColour(juce::TextButton::buttonColourId, fxStandaloneGray1);
+        setColour(juce::TextEditor::backgroundColourId, fxStandaloneGray1);
+        setColour(juce::ListBox::backgroundColourId, fxStandaloneGray1);
+        setColour(juce::ListBox::backgroundColourId, fxStandaloneGray1);
+        setColour(juce::ScrollBar::thumbColourId, fxStandaloneGray4);
+        setColour(juce::ScrollBar::trackColourId, fxStandaloneGray3);
+        setColour(juce::Slider::thumbColourId, fxStandaloneGray4);
+        setColour(juce::Slider::trackColourId, fxStandaloneGray3);
+        setColour(juce::Slider::backgroundColourId, juce::Colour((juce::uint8)255, 255, 255, 20.f));
 
         setColour(SurgeColourIds::componentBgStart,
                   surgeGrayBg.interpolatedWith(surgeOrangeMedium, 0.1));
@@ -63,20 +96,17 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
         setColour(SurgeColourIds::orange, surgeOrange);
         setColour(SurgeColourIds::orangeDark, surgeOrangeDark);
         setColour(SurgeColourIds::orangeMedium, surgeOrangeMedium);
-        setColour(SurgeColourIds::blue, surgeBlue);
-        setColour(SurgeColourIds::black, black);
-        setColour(SurgeColourIds::white, white);
 
         setColour(SurgeColourIds::knobHandle, white);
         setColour(SurgeColourIds::knobBg, surgeOrange);
-        setColour(SurgeColourIds::knobEdge, surgeBlue);
+        setColour(SurgeColourIds::knobEdge, black);
 
         auto disableOpacity = 0.666;
         setColour(SurgeColourIds::knobHandleDisable,
-                  surgeBlue.interpolatedWith(surgeGrayBg, disableOpacity));
+                  black.interpolatedWith(surgeGrayBg, disableOpacity));
         setColour(SurgeColourIds::knobBgDisable,
                   surgeOrange.interpolatedWith(surgeGrayBg, disableOpacity));
-        setColour(SurgeColourIds::knobEdgeDisable, surgeBlue);
+        setColour(SurgeColourIds::knobEdgeDisable, black);
 
         setColour(SurgeColourIds::fxButtonTextUnselected, white);
         setColour(SurgeColourIds::fxButtonTextSelected, black);
@@ -88,8 +118,8 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
         setColour(SurgeColourIds::paramDisabledEdge, juce::Colour(150, 150, 150));
         setColour(SurgeColourIds::paramDisplay, white);
 
-        surgeLogo = juce::Drawable::createFromImageData(BinaryData::SurgeLogoOnlyBlue_svg,
-                                                        BinaryData::SurgeLogoOnlyBlue_svgSize);
+        surgeLogo = juce::Drawable::createFromImageData(BinaryData::SurgeLogoOnlyBlack_svg,
+                                                        BinaryData::SurgeLogoOnlyBlack_svgSize);
     }
 
     virtual void drawRotarySlider(juce::Graphics &g, int x, int y, int width, int height,
@@ -156,11 +186,11 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
             col = findColour(SurgeColourIds::orangeDark);
         }
 
-        auto edge = button.findColour(SurgeColourIds::black);
+        auto edge = juce::Colours::black;
 
         if (shouldDrawButtonAsHighlighted)
         {
-            edge = findColour(SurgeColourIds::white);
+            edge = juce::Colours::white;
             edgeThickness = 2.f;
         }
 
@@ -194,6 +224,8 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
                                        shouldDrawButtonAsDown);
     }
 
+    void drawCornerResizer(juce::Graphics &g, int w, int h, bool, bool) override{};
+
     void paintComponentBackground(juce::Graphics &g, int w, int h)
     {
         int orangeHeight = 40;
@@ -214,14 +246,11 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
         surgeLogo->drawWithin(g, logoBound,
                               juce::RectanglePlacement::xMid | juce::RectanglePlacement::yMid, 1.0);
 
-        g.setColour(findColour(SurgeColourIds::blue));
-        g.setFont(28);
-        // g.drawSingleLineText("SurgeEffectsBank", orangeHeight, h - 12,
-        // juce::Justification::left);
-
+        g.setColour(juce::Colours::black);
         g.drawLine(0, h - orangeHeight, w, h - orangeHeight);
+
         // text
-        g.setFont(12);
+        g.setFont(juce::FontOptions(12));
         g.drawSingleLineText(Surge::Build::FullVersionStr, w - 3, h - 26.f,
                              juce::Justification::right);
         g.drawSingleLineText(Surge::Build::BuildDate, w - 3, h - 6.f, juce::Justification::right);
@@ -231,7 +260,17 @@ class SurgeLookAndFeel : public juce::LookAndFeel_V4
 class SurgeFXParamDisplay : public juce::Component
 {
   public:
-    SurgeFXParamDisplay() : juce::Component() { setAccessible(true); }
+    SurgeFXParamDisplay() : juce::Component()
+    {
+        setAccessible(true);
+        setFocusContainerType(juce::Component::FocusContainerType::keyboardFocusContainer);
+        setWantsKeyboardFocus(true);
+        overlayEditor = std::make_unique<juce::TextEditor>("edit value");
+        overlayEditor->onEscapeKey = [this]() { dismissOverlay(); };
+        overlayEditor->onFocusLost = [this]() { dismissOverlay(); };
+        overlayEditor->onReturnKey = [this]() { processOverlay(); };
+        addChildComponent(*overlayEditor);
+    }
     virtual void setGroup(std::string grp)
     {
         group = grp;
@@ -276,6 +315,7 @@ class SurgeFXParamDisplay : public juce::Component
 
     virtual void paint(juce::Graphics &g) override
     {
+        auto hScale = getHeight() / 55.0;
         auto bounds = getLocalBounds().toFloat().reduced(2.f, 2.f);
         auto edge = findColour(SurgeLookAndFeel::SurgeColourIds::paramEnabledEdge);
 
@@ -294,16 +334,73 @@ class SurgeFXParamDisplay : public juce::Component
         if (isEnabled())
         {
             g.setColour(findColour(SurgeLookAndFeel::SurgeColourIds::paramDisplay));
-            g.setFont(10);
-            g.drawSingleLineText(group, bounds.getX() + 5, bounds.getY() + 2 + 10);
-            g.setFont(12);
-            g.drawSingleLineText(name, bounds.getX() + 5, bounds.getY() + 2 + 10 + 3 + 11);
+            g.setFont(juce::FontOptions(10 * hScale));
+            g.drawSingleLineText(group, bounds.getX() + 5, bounds.getY() + 2 + 10 * hScale);
+            g.setFont(juce::FontOptions(12 * hScale));
+            g.drawSingleLineText(name, bounds.getX() + 5,
+                                 bounds.getY() + 2 + (10 + 3 + 11) * hScale);
 
-            g.setFont(20);
-            g.drawSingleLineText(display, bounds.getX() + 5,
-                                 bounds.getY() + bounds.getHeight() - 5);
+            if (!overlayEditor->isVisible())
+            {
+                g.setFont(juce::FontOptions(20 * hScale));
+                g.drawSingleLineText(display, bounds.getX() + 5,
+                                     bounds.getY() + bounds.getHeight() - 5);
+            }
         }
     }
+
+    void resized() override
+    {
+        overlayEditor->setBounds(getLocalBounds().reduced(2, 3).withTrimmedTop(getHeight() - 28));
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent &e) override
+    {
+        if (!overlayEditor->isVisible())
+            initializeOverlay();
+    }
+
+    bool keyPressed(const juce::KeyPress &key) override
+    {
+        if (key.getKeyCode() == juce::KeyPress::returnKey && !overlayEditor->isVisible())
+        {
+            initializeOverlay();
+            return true;
+        }
+        return false;
+    }
+
+    void initializeOverlay()
+    {
+        if (!allowsTypein)
+            return;
+
+        overlayEditor->setColour(juce::TextEditor::textColourId,
+                                 findColour(SurgeLookAndFeel::SurgeColourIds::paramDisplay));
+        overlayEditor->setColour(juce::TextEditor::outlineColourId,
+                                 juce::Colours::transparentBlack);
+        overlayEditor->setColour(juce::TextEditor::focusedOutlineColourId,
+                                 juce::Colours::transparentBlack);
+        overlayEditor->setColour(juce::TextEditor::ColourIds::highlightColourId,
+                                 juce::Colour(0xFF775522));
+        overlayEditor->setJustification(juce::Justification::bottomLeft);
+        overlayEditor->setFont(juce::FontOptions(20));
+        overlayEditor->setText(display, juce::dontSendNotification);
+        overlayEditor->setVisible(true);
+        overlayEditor->grabKeyboardFocus();
+        overlayEditor->selectAll();
+    }
+
+    void dismissOverlay() { overlayEditor->setVisible(false); }
+
+    void processOverlay()
+    {
+        onOverlayEntered(overlayEditor->getText().toStdString());
+        dismissOverlay();
+    }
+
+    std::function<void(const std::string &)> onOverlayEntered = [](const std::string &) {};
+    bool allowsTypein{true};
 
     struct AH : public juce::AccessibilityHandler
     {
@@ -325,9 +422,12 @@ class SurgeFXParamDisplay : public juce::Component
         };
 
         explicit AH(SurgeFXParamDisplay *s)
-            : comp(s), juce::AccessibilityHandler(
-                           *s, juce::AccessibilityRole::staticText, juce::AccessibilityActions(),
-                           AccessibilityHandler::Interfaces{std::make_unique<AHV>(s)})
+            : comp(s),
+              juce::AccessibilityHandler(*s, juce::AccessibilityRole::button,
+                                         juce::AccessibilityActions().addAction(
+                                             juce::AccessibilityActionType::press,
+                                             [this]() { this->comp->initializeOverlay(); }),
+                                         AccessibilityHandler::Interfaces{std::make_unique<AHV>(s)})
         {
         }
 
@@ -345,6 +445,7 @@ class SurgeFXParamDisplay : public juce::Component
     std::string name = "Uninit";
     std::string display = "SoftwareError";
     bool appearsDeactivated = false;
+    std::unique_ptr<juce::TextEditor> overlayEditor;
 };
 
 class SurgeTempoSyncSwitch : public juce::ToggleButton

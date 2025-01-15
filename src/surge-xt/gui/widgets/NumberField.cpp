@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SurgeGUIEditor.h"
 #include "NumberField.h"
@@ -48,13 +55,21 @@ std::string NumberField::valueToDisplay() const
         int oct_offset = 1;
         if (storage)
             oct_offset = Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MiddleC, 1);
-        char notename[16];
-        oss << get_notename(notename, iValue, oct_offset);
+
+        oss << get_notename(iValue, oct_offset);
     }
     break;
     case Skin::Parameters::POLY_COUNT:
         oss << poly << " / " << iValue;
         break;
+    case Skin::Parameters::WTSE_RESOLUTION:
+    {
+        auto respt = 32;
+        for (int i = 1; i < iValue; ++i)
+            respt *= 2;
+        oss << respt;
+    }
+    break;
     default:
         if (extended)
             return fmt::format("{:.2f}", (float)(iValue / 100.0));
@@ -64,19 +79,27 @@ std::string NumberField::valueToDisplay() const
     }
     return oss.str();
 }
+
 void NumberField::paint(juce::Graphics &g)
 {
     jassert(skin);
 
     bg->draw(g, 1.0);
-    if (bgHover && isHover)
+
+    if (bgHover && isHovered)
+    {
         bgHover->draw(g, 1.0);
+    }
 
     g.setFont(skin->getFont(Fonts::Widgets::NumberField));
 
     g.setColour(textColour);
-    if (isHover)
+
+    if (isHovered)
+    {
         g.setColour(textHoverColour);
+    }
+
     g.drawText(valueToDisplay(), getLocalBounds(), juce::Justification::centred);
 }
 
@@ -90,6 +113,7 @@ void NumberField::setControlMode(Surge::Skin::Parameters::NumberfieldControlMode
 {
     controlMode = n;
     extended = isExtended;
+
     switch (controlMode)
     {
     case Skin::Parameters::NONE:
@@ -117,9 +141,18 @@ void NumberField::setControlMode(Surge::Skin::Parameters::NumberfieldControlMode
         iMin = 1;
         iMax = 100;
         break;
+    case Skin::Parameters::WTSE_RESOLUTION:
+        iMin = 1;
+        iMax = 8;
+        break;
+    case Skin::Parameters::WTSE_FRAMES:
+        iMin = 1;
+        iMax = 256;
+        break;
     }
     bounceToInt();
 }
+
 void NumberField::mouseDown(const juce::MouseEvent &event)
 {
     if (forwardedMainFrameMouseDowns(event))
@@ -135,7 +168,10 @@ void NumberField::mouseDown(const juce::MouseEvent &event)
         return;
     }
 
+    mouseDownLongHold(event);
+
     mouseMode = DRAG;
+    notifyBeginEdit();
 
     if (!Surge::GUI::showCursor(storage))
     {
@@ -153,6 +189,8 @@ void NumberField::mouseDrag(const juce::MouseEvent &event)
         return;
     }
 
+    mouseDragLongHold(event);
+
     float d = -event.getDistanceFromDragStartY();
     float dD = d - lastDistanceChecked;
     float thresh = 10;
@@ -167,8 +205,11 @@ void NumberField::mouseDrag(const juce::MouseEvent &event)
         lastDistanceChecked = d;
     }
 }
+
 void NumberField::mouseUp(const juce::MouseEvent &event)
 {
+    mouseUpLongHold(event);
+
     if (mouseMode == DRAG)
     {
         if (!Surge::GUI::showCursor(storage))
@@ -177,9 +218,11 @@ void NumberField::mouseUp(const juce::MouseEvent &event)
             auto p = localPointToGlobal(mouseDownOrigin);
             juce::Desktop::getInstance().getMainMouseSource().setScreenPosition(p);
         }
+        notifyEndEdit();
     }
     mouseMode = NONE;
 }
+
 void NumberField::mouseDoubleClick(const juce::MouseEvent &event)
 {
     if (supressMainFrameMouseEvent(event))
@@ -190,6 +233,7 @@ void NumberField::mouseDoubleClick(const juce::MouseEvent &event)
     notifyControlModifierDoubleClicked(event.mods);
     repaint();
 }
+
 void NumberField::mouseWheelMove(const juce::MouseEvent &event,
                                  const juce::MouseWheelDetails &wheel)
 {
@@ -206,7 +250,23 @@ bool NumberField::keyPressed(const juce::KeyPress &key)
     auto [action, mod] = Surge::Widgets::accessibleEditAction(key, storage);
 
     if (action == None)
+    {
         return false;
+    }
+
+    if (action == Return)
+    {
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+        if (sge && sge->promptForUserValueEntry(getTag(), this))
+        {
+            return true;
+        }
+        else if (onReturnPressed)
+        {
+            return onReturnPressed(getTag(), this);
+        }
+    }
 
     if (action == OpenMenu)
     {
@@ -215,9 +275,12 @@ bool NumberField::keyPressed(const juce::KeyPress &key)
     }
 
     if (action != Increase && action != Decrease)
+    {
         return false;
+    }
 
     int amt = 1;
+
     if (action == Decrease)
     {
         amt = -1;
@@ -232,6 +295,7 @@ bool NumberField::keyPressed(const juce::KeyPress &key)
     changeBy(amt);
     notifyEndEdit();
     repaint();
+
     return true;
 }
 

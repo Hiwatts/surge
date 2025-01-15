@@ -124,7 +124,7 @@ void MackEQ::getParameterName(VstInt32 index, char *text) {
 		case kParamB: vst_strncpy (text, "Hi", kVstMaxParamStrLen); break;
 		case kParamC: vst_strncpy (text, "Lo", kVstMaxParamStrLen); break;
 		case kParamD: vst_strncpy (text, "Gain", kVstMaxParamStrLen); break;
-		case kParamE: vst_strncpy (text, "Dry/Wet", kVstMaxParamStrLen); break;
+		case kParamE: vst_strncpy (text, "Mix", kVstMaxParamStrLen); break;
         default: break; // unknown parameter, shouldn't happen!
     } //this is our labels for displaying in the VST host
 }

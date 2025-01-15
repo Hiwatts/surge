@@ -58,10 +58,13 @@ if that variable name is in 30 other places.
 * The code is formatted with 4 spaces tab width, and we use `clang-format` to automatically style things as you type.
 Any and all pull requests are verified against `clang-format` and if a PR doesn't adhere to the formatting rules we've set,
 CI will fail (`linux-codequality` job). Make sure the diffs you submit for merging are compliant to our `clang-format`!
+* `clang-format` is not able to format `CMakeLists` but some IDEs have their own formatting tools for it.
+The chosen formatting style here is: 2 space indents/tabs and no space between `if` and following`()`.
+If your IDE is set to auto-format cmake files make sure to configure it accordingly.
 
 ### Naming
 
-* `#define` constants are `UPPERCASE_VARIABLES`
+* used to `#define` constants as `UPPERCASE_VARIABLES`, but prefer `static constexpr <type> UPPERCASE_VARIABLES`. 
 * `class HaveCamelCaseNames`
 * `void functionsAreCamelCaseWithLowerFirst`
 * We are not using `s_` or `m_` or equivalent notations for members or statics

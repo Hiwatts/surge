@@ -1,22 +1,28 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SurgeSynthesizer.h"
 #include "DSPUtils.h"
 #include <time.h>
-#include <vembertech/vt_dsp_endian.h>
 
 #include "filesystem/import.h"
 
@@ -25,28 +31,12 @@
 #include <iterator>
 #include "SurgeMemoryPools.h"
 
+#include "sst/basic-blocks/mechanics/endian-ops.h"
+#include "PatchFileHeaderStructs.h"
+
+namespace mech = sst::basic_blocks::mechanics;
+
 using namespace std;
-
-// seems to be missing from VST2.3, so it's copied from the VST list instead
-//--------------------------------------------------------------------
-// For Preset (Program) (.fxp) with chunk (magic = 'FPCh')
-//--------------------------------------------------------------------
-struct fxChunkSetCustom
-{
-    int chunkMagic; // 'CcnK'
-    int byteSize;   // of this chunk, excl. magic + byteSize
-
-    int fxMagic; // 'FPCh'
-    int version;
-    int fxID; // fx unique id
-    int fxVersion;
-
-    int numPrograms;
-    char prgName[28];
-
-    int chunkSize;
-    // char chunk[8]; // variable
-};
 
 void SurgeSynthesizer::jogPatch(bool increment, bool insideCategory)
 {
@@ -129,7 +119,7 @@ void SurgeSynthesizer::jogPatch(bool increment, bool insideCategory)
 
         patchid_queue = storage.patchOrdering[order];
     }
-    processThreadunsafeOperations();
+    processAudioThreadOpsWhenAudioEngineUnavailable();
     return;
 }
 
@@ -157,7 +147,7 @@ void SurgeSynthesizer::jogCategory(bool increment)
                 order = (order <= 0) ? c - 1 : order - 1;
 
             current_category_id = storage.patchCategoryOrdering[order];
-        } while (storage.patch_category[current_category_id].numberOfPatchesInCatgory == 0 &&
+        } while (storage.patch_category[current_category_id].numberOfPatchesInCategory == 0 &&
                  order != orderOrig);
         // That order != orderOrig isn't needed unless we have an entire empty category tree, in
         // which case it stops an inf loop
@@ -169,7 +159,7 @@ void SurgeSynthesizer::jogCategory(bool increment)
         if (storage.patch_list[p].category == current_category_id)
         {
             patchid_queue = p;
-            processThreadunsafeOperations();
+            processAudioThreadOpsWhenAudioEngineUnavailable();
             return;
         }
     }
@@ -216,21 +206,29 @@ void SurgeSynthesizer::loadPatch(int id)
     storage.getPatch().isDirty = false;
 }
 
-bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, const char *patchName)
+bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, const char *patchName,
+                                       bool forceIsPreset)
 {
+    using namespace sst::io;
+
     std::filebuf f;
     if (!f.open(string_to_path(fxpPath), std::ios::binary | std::ios::in))
+    {
+        storage.reportError(std::string() + "Unable to open file " + std::string(fxpPath),
+                            "Unable to open file");
         return false;
+    }
     fxChunkSetCustom fxp;
     auto read = f.sgetn(reinterpret_cast<char *>(&fxp), sizeof(fxp));
     // FIXME - error if read != chunk size
-    if ((vt_read_int32BE(fxp.chunkMagic) != 'CcnK') || (vt_read_int32BE(fxp.fxMagic) != 'FPCh') ||
-        (vt_read_int32BE(fxp.fxID) != 'cjs3'))
+    if ((mech::endian_read_int32BE(fxp.chunkMagic) != 'CcnK') ||
+        (mech::endian_read_int32BE(fxp.fxMagic) != 'FPCh') ||
+        (mech::endian_read_int32BE(fxp.fxID) != 'cjs3'))
     {
         f.close();
-        auto cm = vt_read_int32BE(fxp.chunkMagic);
-        auto fm = vt_read_int32BE(fxp.fxMagic);
-        auto id = vt_read_int32BE(fxp.fxID);
+        auto cm = mech::endian_read_int32BE(fxp.chunkMagic);
+        auto fm = mech::endian_read_int32BE(fxp.fxMagic);
+        auto id = mech::endian_read_int32BE(fxp.fxID);
 
         std::ostringstream oss;
         oss << "Unable to load " << patchName << ".fxp!";
@@ -253,19 +251,24 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
         //   'cjs3'. ";
         //}
         oss << "This error usually occurs when you attempt to load an .fxp that belongs to another "
-               "plugin into Surge.";
+               "plugin into Surge XT.";
         storage.reportError(oss.str(), "Unknown FXP File");
         return false;
     }
 
-    int cs = vt_read_int32BE(fxp.chunkSize);
+    int cs = mech::endian_read_int32BE(fxp.chunkSize);
     std::unique_ptr<char[]> data{new char[cs]};
+
     if (f.sgetn(data.get(), cs) != cs)
+    {
         perror("Error while loading patch!");
+    }
+
     f.close();
 
     storage.getPatch().comment = "";
     storage.getPatch().author = "";
+
     if (categoryId >= 0)
     {
         storage.getPatch().category = storage.patch_category[categoryId].name;
@@ -274,25 +277,22 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
     {
         storage.getPatch().category = "Drag & Drop";
     }
+
     current_category_id = categoryId;
     storage.getPatch().name = patchName;
 
-    loadRaw(data.get(), cs, true);
+    loadRaw(data.get(), cs, forceIsPreset);
     data.reset();
 
-    /*
-    ** OK so at this point we may have loaded a patch with a tuning override
-    */
+    // OK so at this point we may have loaded a patch with a tuning override
     if (storage.getPatch().patchTuning.tuningStoredInPatch)
     {
-        /*
-         * This code changed radically at the end of the XT 1.0 cycle. Previously we would
-         * check and prompt. Now the semantic is:
-         *
-         * 1. If the patch has a tuning, always parse it onto the patchStreamedTuning member
-         *    (which we reset below if the patch doesn't have it)
-         * 2. based on the tuning setting, override the tuning if there's a patch tuning
-         */
+        // This code changed radically at the end of the XT 1.0 cycle. Previously we would
+        // check and prompt. Now the semantic is:
+        //
+        // 1. If the patch has a tuning, always parse it onto the patchStreamedTuning member
+        //    (which we reset below if the patch doesn't have it)
+        // 2. based on the tuning setting, override the tuning if there's a patch tuning
         bool ot = Surge::Storage::getUserDefaultValue(
             &storage, Surge::Storage::OverrideTuningOnPatchLoad, false);
         bool om = Surge::Storage::getUserDefaultValue(
@@ -304,7 +304,6 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
             {
                 if (ot)
                 {
-                    std::cout << "Resetting Tuning" << std::endl;
                     if (storage.getPatch().patchTuning.scaleContents.size() > 1)
                     {
                         storage.retuneToScale(
@@ -320,7 +319,6 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
                 {
                     if (storage.getPatch().patchTuning.mappingContents.size() > 1)
                     {
-                        std::cout << "Resetting Mapping" << std::endl;
                         auto kb =
                             Tunings::parseKBMData(storage.getPatch().patchTuning.mappingContents);
                         if (storage.getPatch().patchTuning.mappingName.size() > 1)
@@ -370,9 +368,8 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
     }
 
     masterfade = 1.f;
-    /*
-    ** Notify the host display that the patch name has changed
-    */
+
+    // Notify the host display that the patch name has changed
     storage.getPatch().isDirty = false;
     updateDisplay();
 
@@ -381,6 +378,13 @@ bool SurgeSynthesizer::loadPatchByPath(const char *fxpPath, int categoryId, cons
 
 void SurgeSynthesizer::enqueuePatchForLoad(const void *data, int size)
 {
+    {
+        // If we are forcing values on, we don't want to do any enqueued loads
+        // or want to wait for them to complete
+        std::lock_guard<std::mutex> mg(patchLoadSpawnMutex);
+        has_patchid_file = false;
+        patchid_queue = -1;
+    }
     {
         std::lock_guard<std::mutex> g(rawLoadQueueMutex);
 
@@ -397,19 +401,27 @@ void SurgeSynthesizer::processEnqueuedPatchIfNeeded()
     bool expected = true;
     if (rawLoadEnqueued.compare_exchange_weak(expected, true) && expected)
     {
+        {
+            // If we are forcing values on, we don't want to do any enqueued loads
+            // or want to wait for them to complete
+            std::lock_guard<std::mutex> mg(patchLoadSpawnMutex);
+            has_patchid_file = false;
+            patchid_queue = -1;
+        }
         std::lock_guard<std::mutex> g(rawLoadQueueMutex);
         rawLoadEnqueued = false;
         loadRaw(enqueuedLoadData.get(), enqueuedLoadSize);
         loadFromDawExtraState();
 
         rawLoadNeedsUIDawExtraState = true;
+        refresh_editor = true;
     }
 }
 
 void SurgeSynthesizer::loadRaw(const void *data, int size, bool preset)
 {
     halt_engine = true;
-    allNotesOff();
+    stopSound();
     for (int s = 0; s < n_scenes; s++)
         for (int i = 0; i < n_customcontrollers; i++)
             storage.getPatch().scene[s].modsources[ms_ctrl1 + i]->reset();
@@ -419,7 +431,7 @@ void SurgeSynthesizer::loadRaw(const void *data, int size, bool preset)
     storage.getPatch().update_controls(false, nullptr, true);
     for (int i = 0; i < n_fx_slots; i++)
     {
-        memcpy((void *)&fxsync[i], (void *)&storage.getPatch().fx[i], sizeof(FxStorage));
+        fxsync[i] = storage.getPatch().fx[i];
         fx_reload[i] = true;
     }
 
@@ -448,15 +460,14 @@ void SurgeSynthesizer::loadRaw(const void *data, int size, bool preset)
     patch_loaded = true;
     refresh_editor = true;
 
-    /*
-    ** new patch just loaded so I look up and set the current category and patch.
-    ** This is used to draw checkmarks in the menu. If for some reason we don't
-    ** find one, nothing will break
-    */
+    // New patch was just loaded so I look up and set the current category and patch.
+    // This is used to draw checkmarks in the menu. If for some reason we don't find one,
+    // nothing will break
     std::vector<int> inferredPatchIds;
     int cnt = storage.patch_list.size();
     string name = storage.getPatch().name;
     string cat = storage.getPatch().category;
+
     for (int p = 0; p < cnt; ++p)
     {
         if (storage.patch_list[p].name == name &&
@@ -497,9 +508,7 @@ void SurgeSynthesizer::loadRaw(const void *data, int size, bool preset)
         }
         else
         {
-            /*
-             * I don't see how this could ever happen. Punt.
-             */
+            // I don't see how this could ever happen. Punt.
             patchid = inferredPatchIds.back();
         }
     }
@@ -510,10 +519,12 @@ void SurgeSynthesizer::loadRaw(const void *data, int size, bool preset)
 #include <sys/stat.h>
 #endif
 
-void SurgeSynthesizer::savePatch(bool factoryInPlace)
+void SurgeSynthesizer::savePatch(bool factoryInPlace, bool skipOverwrite)
 {
     if (storage.getPatch().category.empty())
+    {
         storage.getPatch().category = "Default";
+    }
 
     fs::path savepath = storage.userPatchesPath;
 
@@ -527,6 +538,7 @@ void SurgeSynthesizer::savePatch(bool factoryInPlace)
     try
     {
         std::string tempCat = storage.getPatch().category;
+
 #if WINDOWS
         if (tempCat[0] == '\\' || tempCat[0] == '/')
         {
@@ -545,7 +557,26 @@ void SurgeSynthesizer::savePatch(bool factoryInPlace)
             return;
         }
 
+        auto comppath = savepath;
         savepath /= catPath;
+
+        comppath = comppath.lexically_normal();
+        savepath = savepath.lexically_normal();
+
+        // make sure your category isnt "../../../etc/config"
+
+        auto [_, compIt] =
+            std::mismatch(savepath.begin(), savepath.end(), comppath.begin(), comppath.end());
+        if (compIt != comppath.end())
+        {
+            storage.reportError(
+                "Your save path is not a directory below the user patches directory. "
+                "This usually means you are doing something like trying to use too many ../"
+                " in your category name.",
+                "Save Path not below user path");
+            return;
+        }
+
         create_directories(savepath);
     }
     catch (...)
@@ -560,28 +591,43 @@ void SurgeSynthesizer::savePatch(bool factoryInPlace)
     fs::path filename = savepath;
     filename /= string_to_path(storage.getPatch().name + ".fxp");
 
-    if (fs::exists(filename))
+    try
     {
-        storage.okCancelProvider(std::string("The patch '" + storage.getPatch().name +
-                                             "' already exists in '" + storage.getPatch().category +
-                                             "'. Are you sure you want to overwrite it?"),
-                                 std::string("Overwrite Patch"), SurgeStorage::OK,
-                                 [filename, this](SurgeStorage::OkCancel okc) {
-                                     if (okc == SurgeStorage::OK)
-                                     {
-                                         savePatchToPath(filename);
-                                     }
-                                 });
+        if (fs::exists(filename) && !skipOverwrite)
+        {
+            storage.okCancelProvider(std::string("The patch '" + storage.getPatch().name +
+                                                 "' already exists in '" +
+                                                 storage.getPatch().category +
+                                                 "'. Are you sure you want to overwrite it?"),
+                                     std::string("Overwrite Patch"), SurgeStorage::OK,
+                                     [filename, this](SurgeStorage::OkCancel okc) {
+                                         if (okc == SurgeStorage::OK)
+                                         {
+                                             savePatchToPath(filename);
+                                         }
+                                     });
+        }
+        else
+        {
+            savePatchToPath(filename);
+        }
     }
-    else
+    catch (...)
     {
-        savePatchToPath(filename);
+        storage.reportError("Exception occurred while attempting to write the patch! Most likely, "
+                            "invalid characters or a reserved name was used to name the patch. "
+                            "Please try again with a different name!",
+                            "Error");
+        return;
     }
+
     storage.getPatch().isDirty = false;
 }
 
-void SurgeSynthesizer::savePatchToPath(fs::path filename)
+void SurgeSynthesizer::savePatchToPath(fs::path filename, bool refreshPatchList)
 {
+    using namespace sst::io;
+
     std::ofstream f(filename, std::ios::out | std::ios::binary);
 
     if (!f)
@@ -593,42 +639,45 @@ void SurgeSynthesizer::savePatchToPath(fs::path filename)
     }
 
     fxChunkSetCustom fxp;
-    fxp.chunkMagic = vt_write_int32BE('CcnK');
-    fxp.fxMagic = vt_write_int32BE('FPCh');
-    fxp.fxID = vt_write_int32BE('cjs3');
-    fxp.numPrograms = vt_write_int32BE(1);
-    fxp.version = vt_write_int32BE(1);
-    fxp.fxVersion = vt_write_int32BE(1);
+    fxp.chunkMagic = mech::endian_write_int32BE('CcnK');
+    fxp.fxMagic = mech::endian_write_int32BE('FPCh');
+    fxp.fxID = mech::endian_write_int32BE('cjs3');
+    fxp.numPrograms = mech::endian_write_int32BE(1);
+    fxp.version = mech::endian_write_int32BE(1);
+    fxp.fxVersion = mech::endian_write_int32BE(1);
     strncpy(fxp.prgName, storage.getPatch().name.c_str(), 28);
 
     void *data;
     unsigned int datasize = storage.getPatch().save_patch(&data);
 
-    fxp.chunkSize = vt_write_int32BE(datasize);
+    fxp.chunkSize = mech::endian_write_int32BE(datasize);
     fxp.byteSize = 0;
 
     f.write((char *)&fxp, sizeof(fxChunkSetCustom));
     f.write((char *)data, datasize);
     f.close();
 
-    // refresh list
-    storage.refresh_patchlist();
-    storage.initializePatchDb(true);
-
-    int idx = 0;
-    for (auto p : storage.patch_list)
+    if (refreshPatchList)
     {
-        if (p.path == filename)
-        {
-            patchid = idx;
-            current_category_id = p.category;
-        }
-        idx++;
-    }
-    refresh_editor = true;
-    midiprogramshavechanged = true;
+        // refresh list
+        storage.refresh_patchlist();
+        storage.initializePatchDb(true);
 
-    storage.getPatch().isDirty = false;
+        int idx = 0;
+        for (auto p : storage.patch_list)
+        {
+            if (p.path == filename)
+            {
+                patchid = idx;
+                current_category_id = p.category;
+            }
+            idx++;
+        }
+        refresh_editor = true;
+        midiprogramshavechanged = true;
+
+        storage.getPatch().isDirty = false;
+    }
 }
 
 unsigned int SurgeSynthesizer::saveRaw(void **data) { return storage.getPatch().save_patch(data); }

@@ -1,4 +1,26 @@
-#pragma once
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+#ifndef SURGE_SRC_COMMON_RESOURCE_H
+#define SURGE_SRC_COMMON_RESOURCE_H
 
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
@@ -50,6 +72,9 @@
 #define IDB_FAVORITE_BUTTON 186
 #define IDB_SEARCH_BUTTON 187
 #define IDB_FAVORITE_MENU_ICON 188
+#define IDB_UNDO_BUTTON 189
+#define IDB_REDO_BUTTON 190
+#define IDB_FILTER_ANALYSIS 191
 
 // == SVG == Do not remove this comment - it indicates the start of the automated SVG adding block
 #define IDB_MSEG_NODES 301
@@ -74,3 +99,5 @@
 #define IDB_VUMETER_BARS 181
 #define IDB_MIDI_LEARN 182
 // == /SVG == Do not remove this comment
+
+#endif // SURGE_SRC_COMMON_RESOURCE_H

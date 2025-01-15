@@ -1,29 +1,40 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SineOscillator.h"
-#include "FastMath.h"
+#include "sst/basic-blocks/dsp/FastMath.h"
 #include <algorithm>
+
+#include "sst/basic-blocks/mechanics/block-ops.h"
+#include "sst/basic-blocks/mechanics/simd-ops.h"
+namespace mech = sst::basic_blocks::mechanics;
 
 /*
  * Sine Oscillator Optimization Strategy
  *
  * With Surge 1.9, we undertook a bunch of work to optimize the sine oscillator runtime at high
  * unison count with odd shapes. Basically at high unison we were doing large numbers of loops,
- * branches and so forth, and not using any of the advantage you could get by realizing the paralle
- * structure of unison. So we fixed that.
+ * branches and so forth, and not using any of the advantage you could get by realizing the
+ * parallel structure of unison. So we fixed that.
  *
  * There's two core fixes.
  *
@@ -40,7 +51,7 @@
  * So #1 just means that process_block_internal has a <mode> template as do many other operators
  * and we use template specialization. We are specializing the function
  *
- *   __m128 valueFromSineAndCosForMode<mode>(__m128 s, __m128 c, int maxc  )
+ *   SIMD_M128 valueFromSineAndCosForMode<mode>(SIMD_M128 s, SIMD_M128 c, int maxc  )
  *
  * The default impleementation of this function calls
  *
@@ -67,7 +78,7 @@
  */
 
 SineOscillator::SineOscillator(SurgeStorage *storage, OscillatorStorage *oscdata, pdata *localcopy)
-    : Oscillator(storage, oscdata, localcopy), lp(storage), hp(storage)
+    : Oscillator(storage, oscdata, localcopy), lp(storage), hp(storage), charFilt(storage)
 {
 }
 
@@ -87,7 +98,7 @@ void SineOscillator::prepare_unison(int voices)
     }
 
     // normalize to be sample rate independent amount of time for 50 44.1k samples
-    dplaying = 1.0 / 50.0 * 44100 / samplerate;
+    dplaying = 1.0 / 50.0 * 44100 / storage->samplerate;
     playingramp[0] = 1;
     for (int i = 1; i < voices; ++i)
         playingramp[i] = 0;
@@ -96,6 +107,7 @@ void SineOscillator::prepare_unison(int voices)
 void SineOscillator::init(float pitch, bool is_display, bool nonzero_init_drift)
 {
     n_unison = limit_range(oscdata->p[sine_unison_voices].val.i, 1, MAX_UNISON);
+    limit_range(oscdata->p[sine_unison_voices].val.i, 1, MAX_UNISON);
 
     if (is_display)
     {
@@ -108,7 +120,8 @@ void SineOscillator::init(float pitch, bool is_display, bool nonzero_init_drift)
     {
         phase[i] = // phase in range -PI to PI
             (oscdata->retrigger.val.b || is_display) ? 0.f : 2.0 * M_PI * storage->rand_01() - M_PI;
-        lastvalue[i] = 0.f;
+        lastvalue[0][i] = 0.f;
+        lastvalue[1][i] = 0.f;
         driftLFO[i].init(nonzero_init_drift);
         sine[i].set_phase(phase[i]);
     }
@@ -129,10 +142,6 @@ void SineOscillator::init(float pitch, bool is_display, bool nonzero_init_drift)
     lp.coeff_LP2B(lp.calc_omega(oscdata->p[sine_highcut].val.f / 12.0) / OSC_OVERSAMPLING, 0.707);
 
     charFilt.init(storage->getPatch().character.val.i);
-    if (storage->getPatch().streamingRevision <= 15)
-    {
-        charFilt.doFilter = false;
-    }
 }
 
 SineOscillator::~SineOscillator() {}
@@ -165,12 +174,12 @@ inline int calcquadrant0(float sinx, float cosx)
     return quadrant;
 }
 
-inline __m128 calcquadrantSSE(__m128 sinx, __m128 cosx)
+inline SIMD_M128 calcquadrantSSE(SIMD_M128 sinx, SIMD_M128 cosx)
 {
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1), m2 = _mm_set1_ps(2), m3 = _mm_set1_ps(3);
-    auto slt = _mm_and_ps(_mm_cmple_ps(sinx, mz), m1);
-    auto clt = _mm_and_ps(_mm_cmple_ps(cosx, mz), m1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1), m2 = SIMD_MM(set1_ps)(2), m3 = SIMD_MM(set1_ps)(3);
+    auto slt = SIMD_MM(and_ps)(SIMD_MM(cmple_ps)(sinx, mz), m1);
+    auto clt = SIMD_MM(and_ps)(SIMD_MM(cmple_ps)(cosx, mz), m1);
 
     // quadrant
     // 1: sin > cos > so this is 0 + 0 - 0 + 1 = 1
@@ -178,9 +187,9 @@ inline __m128 calcquadrantSSE(__m128 sinx, __m128 cosx)
     // 3: sin < cos < so this is 3 + 1 - 2 + 1 = 3
     // 4: sin < cos > so this is 3 + 0 - 0 + 1 = 4
     // int quadrant = 3 * sxl0 + cxl0 - 2 * sxl0 * cxl0 + 1;
-    auto thsx = _mm_mul_ps(m3, slt);
-    auto twsc = _mm_mul_ps(m2, _mm_mul_ps(slt, clt));
-    auto r = _mm_add_ps(_mm_add_ps(thsx, clt), _mm_sub_ps(m1, twsc));
+    auto thsx = SIMD_MM(mul_ps)(m3, slt);
+    auto twsc = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(slt, clt));
+    auto r = SIMD_MM(add_ps)(SIMD_MM(add_ps)(thsx, clt), SIMD_MM(sub_ps)(m1, twsc));
     return r;
 }
 /*
@@ -194,24 +203,26 @@ template <int mode> inline float valueFromSinAndCosForModeAsScalar(float s, floa
  * SSE version for every case to date.
  */
 template <int mode>
-inline __m128 valueFromSinAndCosForMode(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     float res alignas(16)[4];
     float sv alignas(16)[4], cv alignas(16)[4];
-    _mm_store_ps(sv, svaluesse);
-    _mm_store_ps(cv, cvaluesse);
+    SIMD_MM(store_ps)(sv, svaluesse);
+    SIMD_MM(store_ps)(cv, cvaluesse);
     for (int i = 0; i < maxc; ++i)
         res[i] = valueFromSinAndCosForModeAsScalar<mode>(sv[i], cv[i]);
-    return _mm_load_ps(res);
+    return SIMD_MM(load_ps)(res);
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<0>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<0>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // mode zero is just sine obviously
     return svaluesse;
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<1>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<1>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     /*
     switch (quadrant)
@@ -222,361 +233,375 @@ template <> inline __m128 valueFromSinAndCosForMode<1>(__m128 svaluesse, __m128 
      case 4: pvalue = -1 + cosx;
     }
      */
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
-    const auto mm1 = _mm_set1_ps(-1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto mm1 = SIMD_MM(set1_ps)(-1);
 
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    auto sw = _mm_sub_ps(_mm_and_ps(h1, m1), _mm_andnot_ps(h1, m1)); // this is now 1 1 -1 -1
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto sw = SIMD_MM(sub_ps)(SIMD_MM(and_ps)(h1, m1),
+                              SIMD_MM(andnot_ps)(h1, m1)); // this is now 1 1 -1 -1
 
-    auto q24 = _mm_cmplt_ps(_mm_mul_ps(svaluesse, cvaluesse), mz);
-    auto pm = _mm_sub_ps(_mm_and_ps(q24, m1), _mm_andnot_ps(q24, m1)); // this is -1 1 -1 1
-    return _mm_add_ps(sw, _mm_mul_ps(pm, cvaluesse));
+    auto q24 = SIMD_MM(cmplt_ps)(SIMD_MM(mul_ps)(svaluesse, cvaluesse), mz);
+    auto pm =
+        SIMD_MM(sub_ps)(SIMD_MM(and_ps)(q24, m1), SIMD_MM(andnot_ps)(q24, m1)); // this is -1 1 -1 1
+    return SIMD_MM(add_ps)(sw, SIMD_MM(mul_ps)(pm, cvaluesse));
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<2>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<2>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // First half of sine.
-    const auto mz = _mm_setzero_ps();
-    return _mm_and_ps(svaluesse, _mm_cmpge_ps(svaluesse, mz));
+    const auto mz = SIMD_MM(setzero_ps)();
+    return SIMD_MM(and_ps)(svaluesse, SIMD_MM(cmpge_ps)(svaluesse, mz));
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<3>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<3>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // 1 -/+ cosx in first half only
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
-    const auto mm1 = _mm_set1_ps(-1);
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto mm1 = SIMD_MM(set1_ps)(-1);
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    auto q2 = _mm_and_ps(h1, _mm_cmple_ps(cvaluesse, mz));
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto q2 = SIMD_MM(and_ps)(h1, SIMD_MM(cmple_ps)(cvaluesse, mz));
 
-    auto fh = _mm_and_ps(h1, m1);
-    auto cx =
-        _mm_mul_ps(fh, _mm_mul_ps(cvaluesse, _mm_add_ps(mm1, _mm_mul_ps(m2, _mm_and_ps(q2, m1)))));
+    auto fh = SIMD_MM(and_ps)(h1, m1);
+    auto cx = SIMD_MM(mul_ps)(
+        fh, SIMD_MM(mul_ps)(cvaluesse,
+                            SIMD_MM(add_ps)(mm1, SIMD_MM(mul_ps)(m2, SIMD_MM(and_ps)(q2, m1)))));
 
-    // return _mm_and_ps(svaluesse, _mm_cmpge_ps(svaluesse, mz));
-    return _mm_add_ps(fh, cx);
+    // return SIMD_MM(and_ps)(svaluesse, SIMD_MM(cmpge_ps)(svaluesse, mz));
+    return SIMD_MM(add_ps)(fh, cx);
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<4>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<4>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Sine 2x in first half
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
-    return _mm_and_ps(s2x, _mm_cmpge_ps(svaluesse, mz));
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
+    return SIMD_MM(and_ps)(s2x, SIMD_MM(cmpge_ps)(svaluesse, mz));
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<5>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<5>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // This is basically a double frequency shape 0 in the first half only
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
-    auto c2x = _mm_sub_ps(m1, _mm_mul_ps(m2, _mm_mul_ps(svaluesse, svaluesse)));
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
+    auto c2x = SIMD_MM(sub_ps)(m1, SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, svaluesse)));
 
     auto v1 = valueFromSinAndCosForMode<1>(s2x, c2x, maxc);
-    return _mm_and_ps(_mm_cmpge_ps(svaluesse, mz), v1);
+    return SIMD_MM(and_ps)(SIMD_MM(cmpge_ps)(svaluesse, mz), v1);
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<6>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<6>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // abs(Sine 2x in first half
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
-    auto s2fh = _mm_and_ps(s2x, _mm_cmpge_ps(svaluesse, mz));
-    return abs_ps(s2fh);
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
+    auto s2fh = SIMD_MM(and_ps)(s2x, SIMD_MM(cmpge_ps)(svaluesse, mz));
+    return mech::abs_ps(s2fh);
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<7>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<7>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
-    return abs_ps(valueFromSinAndCosForMode<5>(svaluesse, cvaluesse, maxc));
+    return mech::abs_ps(valueFromSinAndCosForMode<5>(svaluesse, cvaluesse, maxc));
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<8>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<8>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // 2 * First half of sin - 1
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
-    const auto m1 = _mm_set1_ps(1);
-    auto fhs = _mm_and_ps(svaluesse, _mm_cmpge_ps(svaluesse, mz));
-    return _mm_sub_ps(_mm_mul_ps(m2, fhs), m1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    auto fhs = SIMD_MM(and_ps)(svaluesse, SIMD_MM(cmpge_ps)(svaluesse, mz));
+    return SIMD_MM(sub_ps)(SIMD_MM(mul_ps)(m2, fhs), m1);
 }
 
-template <> inline __m128 valueFromSinAndCosForMode<9>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+template <>
+inline SIMD_M128 valueFromSinAndCosForMode<9>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // zero out quadrant 1 and 3 which are quadrants where C and S have the same sign
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
-    const auto m1 = _mm_set1_ps(1);
-    auto css = _mm_mul_ps(svaluesse, cvaluesse);
-    return _mm_and_ps(svaluesse, _mm_cmple_ps(css, mz));
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    auto css = SIMD_MM(mul_ps)(svaluesse, cvaluesse);
+    return SIMD_MM(and_ps)(svaluesse, SIMD_MM(cmple_ps)(css, mz));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<10>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<10>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // zero out quadrant 2 and 3 which are quadrants where C and S have the different sign
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
-    const auto m1 = _mm_set1_ps(1);
-    auto css = _mm_mul_ps(svaluesse, cvaluesse);
-    return _mm_and_ps(svaluesse, _mm_cmpge_ps(css, mz));
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    auto css = SIMD_MM(mul_ps)(svaluesse, cvaluesse);
+    return SIMD_MM(and_ps)(svaluesse, SIMD_MM(cmpge_ps)(css, mz));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<11>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<11>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     auto q = valueFromSinAndCosForMode<3>(svaluesse, cvaluesse, maxc);
-    const auto m2 = _mm_set1_ps(2);
-    const auto m1 = _mm_set1_ps(1);
-    return _mm_sub_ps(_mm_mul_ps(m2, q), m1);
+    const auto m2 = SIMD_MM(set1_ps)(2);
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    return SIMD_MM(sub_ps)(SIMD_MM(mul_ps)(m2, q), m1);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<12>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<12>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Flip sign of sin2x in quadrant 2 or 3 (when cosine is negative)
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
-    const auto m1 = _mm_set1_ps(1);
-    const auto mm1 = _mm_set1_ps(-1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto mm1 = SIMD_MM(set1_ps)(-1);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
 
-    auto q23 = _mm_cmpge_ps(cvaluesse, mz);
-    auto mul = _mm_add_ps(_mm_and_ps(q23, m1), _mm_andnot_ps(q23, mm1));
-    return _mm_mul_ps(s2x, mul);
+    auto q23 = SIMD_MM(cmpge_ps)(cvaluesse, mz);
+    auto mul = SIMD_MM(add_ps)(SIMD_MM(and_ps)(q23, m1), SIMD_MM(andnot_ps)(q23, mm1));
+    return SIMD_MM(mul_ps)(s2x, mul);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<13>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<13>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Flip sign of sin2x in quadrant 3  (when sine is negative)
     // and zero it in quadrant 2 and 4 (when sine and cos have different signs or s2x is negative)
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
-    const auto m1 = _mm_set1_ps(1);
-    const auto mm1 = _mm_set1_ps(-1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto mm1 = SIMD_MM(set1_ps)(-1);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
 
-    auto q13 = _mm_cmpge_ps(s2x, mz);
-    auto q2 = _mm_cmple_ps(svaluesse, mz);
-    auto signflip = _mm_sub_ps(m1, _mm_and_ps(q2, m2));
+    auto q13 = SIMD_MM(cmpge_ps)(s2x, mz);
+    auto q2 = SIMD_MM(cmple_ps)(svaluesse, mz);
+    auto signflip = SIMD_MM(sub_ps)(m1, SIMD_MM(and_ps)(q2, m2));
 
-    return _mm_and_ps(q13, _mm_mul_ps(signflip, s2x));
+    return SIMD_MM(and_ps)(q13, SIMD_MM(mul_ps)(signflip, s2x));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<14>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<14>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // abs of cos2x in the first half
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto c2x = _mm_sub_ps(m1, _mm_mul_ps(m2, _mm_mul_ps(svaluesse, svaluesse)));
-    auto q23 = _mm_cmpge_ps(svaluesse, mz);
-    return _mm_and_ps(q23, abs_ps(c2x));
+    auto c2x = SIMD_MM(sub_ps)(m1, SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, svaluesse)));
+    auto q23 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    return SIMD_MM(and_ps)(q23, mech::abs_ps(c2x));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<15>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<15>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // 1 - sinx in quadrant 1, -1-sinx in quadrant 4, zero otherwise
 
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
-    const auto mm1 = _mm_set1_ps(-1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto mm1 = SIMD_MM(set1_ps)(-1);
 
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    auto sig = _mm_add_ps(_mm_and_ps(h1, _mm_sub_ps(m1, svaluesse)),
-                          _mm_andnot_ps(h1, _mm_sub_ps(mm1, svaluesse)));
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto sig = SIMD_MM(add_ps)(SIMD_MM(and_ps)(h1, SIMD_MM(sub_ps)(m1, svaluesse)),
+                               SIMD_MM(andnot_ps)(h1, SIMD_MM(sub_ps)(mm1, svaluesse)));
 
-    auto q14 = _mm_cmpge_ps(cvaluesse, mz);
-    return _mm_and_ps(q14, sig);
+    auto q14 = SIMD_MM(cmpge_ps)(cvaluesse, mz);
+    return SIMD_MM(and_ps)(q14, sig);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<16>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<16>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // 1 - sinx in quadrant 1, cosx - 1 in quadrant 4, zero otherwise
 
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
 
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    auto sig = _mm_add_ps(_mm_and_ps(h1, _mm_sub_ps(m1, svaluesse)),
-                          _mm_andnot_ps(h1, _mm_sub_ps(cvaluesse, m1)));
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto sig = SIMD_MM(add_ps)(SIMD_MM(and_ps)(h1, SIMD_MM(sub_ps)(m1, svaluesse)),
+                               SIMD_MM(andnot_ps)(h1, SIMD_MM(sub_ps)(cvaluesse, m1)));
 
-    auto q14 = _mm_cmpge_ps(cvaluesse, mz);
-    return _mm_and_ps(q14, sig);
+    auto q14 = SIMD_MM(cmpge_ps)(cvaluesse, mz);
+    return SIMD_MM(and_ps)(q14, sig);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<17>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<17>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // 1-sinx in 1,2; -1-sinx in 3,4
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
 
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    auto sw = _mm_sub_ps(_mm_and_ps(h1, m1), _mm_andnot_ps(h1, m1)); // this is now 1 1 -1 -1
-    return _mm_sub_ps(sw, svaluesse);
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto sw = SIMD_MM(sub_ps)(SIMD_MM(and_ps)(h1, m1),
+                              SIMD_MM(andnot_ps)(h1, m1)); // this is now 1 1 -1 -1
+    return SIMD_MM(sub_ps)(sw, svaluesse);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<18>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<18>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // sin2x in 1, cosx in 23, -sin2x in 4
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    auto sw = _mm_sub_ps(_mm_and_ps(h1, m1), _mm_andnot_ps(h1, m1)); // this is now 1 1 -1 -1
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto sw = SIMD_MM(sub_ps)(SIMD_MM(and_ps)(h1, m1),
+                              SIMD_MM(andnot_ps)(h1, m1)); // this is now 1 1 -1 -1
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
-    auto q23 = _mm_cmple_ps(cvaluesse, mz);
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
+    auto q23 = SIMD_MM(cmple_ps)(cvaluesse, mz);
 
-    return _mm_add_ps(_mm_and_ps(q23, cvaluesse), _mm_andnot_ps(q23, _mm_mul_ps(sw, s2x)));
+    return SIMD_MM(add_ps)(SIMD_MM(and_ps)(q23, cvaluesse),
+                           SIMD_MM(andnot_ps)(q23, SIMD_MM(mul_ps)(sw, s2x)));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<19>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<19>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // This is basically a double frequency shape 0 in the first half only
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
-    auto c2x = _mm_sub_ps(m1, _mm_mul_ps(m2, _mm_mul_ps(svaluesse, svaluesse)));
-    auto s4x = _mm_mul_ps(m2, _mm_mul_ps(s2x, c2x));
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
+    auto c2x = SIMD_MM(sub_ps)(m1, SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, svaluesse)));
+    auto s4x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(s2x, c2x));
 
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    auto q23 = _mm_cmpge_ps(cvaluesse, mz);
-    auto fh = _mm_sub_ps(_mm_and_ps(q23, s2x), _mm_andnot_ps(q23, s4x));
-    auto res = _mm_add_ps(_mm_and_ps(h1, fh), _mm_andnot_ps(h1, svaluesse));
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto q23 = SIMD_MM(cmpge_ps)(cvaluesse, mz);
+    auto fh = SIMD_MM(sub_ps)(SIMD_MM(and_ps)(q23, s2x), SIMD_MM(andnot_ps)(q23, s4x));
+    auto res = SIMD_MM(add_ps)(SIMD_MM(and_ps)(h1, fh), SIMD_MM(andnot_ps)(h1, svaluesse));
 
     return res;
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<20>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<20>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Sine in quadrants 2 and 4; +/-1 in quadrants 1 and 3.
     // quadrants 1 and 3 are when cos and sin have the same sign
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
 
-    auto sbc = _mm_mul_ps(svaluesse, cvaluesse);
-    auto q13 = _mm_cmpge_ps(sbc, mz);
-    auto h12 = _mm_cmpge_ps(svaluesse, mz);
-    auto mv = _mm_sub_ps(_mm_and_ps(h12, m1), _mm_andnot_ps(h12, m1));
-    return _mm_add_ps(_mm_andnot_ps(q13, mv), _mm_and_ps(q13, svaluesse));
+    auto sbc = SIMD_MM(mul_ps)(svaluesse, cvaluesse);
+    auto q13 = SIMD_MM(cmpge_ps)(sbc, mz);
+    auto h12 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto mv = SIMD_MM(sub_ps)(SIMD_MM(and_ps)(h12, m1), SIMD_MM(andnot_ps)(h12, m1));
+    return SIMD_MM(add_ps)(SIMD_MM(andnot_ps)(q13, mv), SIMD_MM(and_ps)(q13, svaluesse));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<21>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<21>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Sine in quadrants 2 and 4; +/-1 in quadrants 1 and 3.
     // quadrants 1 and 3 are when cos and sin have the same sign
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
 
-    auto sbc = _mm_mul_ps(svaluesse, cvaluesse);
-    auto q13 = _mm_cmpge_ps(sbc, mz);
-    auto h12 = _mm_cmpge_ps(svaluesse, mz);
-    auto mv = _mm_sub_ps(_mm_and_ps(h12, m1), _mm_andnot_ps(h12, m1));
-    return _mm_add_ps(_mm_and_ps(q13, mv), _mm_andnot_ps(q13, svaluesse));
+    auto sbc = SIMD_MM(mul_ps)(svaluesse, cvaluesse);
+    auto q13 = SIMD_MM(cmpge_ps)(sbc, mz);
+    auto h12 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    auto mv = SIMD_MM(sub_ps)(SIMD_MM(and_ps)(h12, m1), SIMD_MM(andnot_ps)(h12, m1));
+    return SIMD_MM(add_ps)(SIMD_MM(and_ps)(q13, mv), SIMD_MM(andnot_ps)(q13, svaluesse));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<22>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<22>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // first 2 quadrants are 1-sin
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
 
-    auto sp = _mm_cmpge_ps(cvaluesse, mz);
-    return _mm_and_ps(sp, svaluesse);
+    auto sp = SIMD_MM(cmpge_ps)(cvaluesse, mz);
+    return SIMD_MM(and_ps)(sp, svaluesse);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<23>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<23>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // first 2 quadrants are 1-sin
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
 
-    auto sp = _mm_cmple_ps(cvaluesse, mz);
-    return _mm_and_ps(sp, svaluesse);
+    auto sp = SIMD_MM(cmple_ps)(cvaluesse, mz);
+    return SIMD_MM(and_ps)(sp, svaluesse);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<24>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<24>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // first 2 quadrants are 1-sin
-    const auto mz = _mm_setzero_ps();
-    const auto m1 = _mm_set1_ps(1);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m1 = SIMD_MM(set1_ps)(1);
 
-    auto onems = _mm_sub_ps(m1, svaluesse);
-    auto sp = _mm_cmpge_ps(svaluesse, mz);
-    return _mm_add_ps(_mm_and_ps(sp, onems), _mm_andnot_ps(sp, svaluesse));
+    auto onems = SIMD_MM(sub_ps)(m1, svaluesse);
+    auto sp = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    return SIMD_MM(add_ps)(SIMD_MM(and_ps)(sp, onems), SIMD_MM(andnot_ps)(sp, svaluesse));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<26>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<26>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Zero out sine in quadrant 3 (which is cos and sin are both negative)
-    const auto mz = _mm_setzero_ps();
-    auto sl0 = _mm_cmple_ps(svaluesse, mz);
-    auto cl0 = _mm_cmple_ps(cvaluesse, mz);
-    return _mm_andnot_ps(_mm_and_ps(sl0, cl0), svaluesse);
+    const auto mz = SIMD_MM(setzero_ps)();
+    auto sl0 = SIMD_MM(cmple_ps)(svaluesse, mz);
+    auto cl0 = SIMD_MM(cmple_ps)(cvaluesse, mz);
+    return SIMD_MM(andnot_ps)(SIMD_MM(and_ps)(sl0, cl0), svaluesse);
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<25>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<25>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Sine 2x in first half
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
     auto qv = calcquadrantSSE(svaluesse, cvaluesse);
-    auto h1 = _mm_cmpge_ps(svaluesse, mz);
-    return _mm_and_ps(h1, _mm_div_ps(s2x, qv));
+    auto h1 = SIMD_MM(cmpge_ps)(svaluesse, mz);
+    return SIMD_MM(and_ps)(h1, SIMD_MM(div_ps)(s2x, qv));
 }
 
 template <>
-inline __m128 valueFromSinAndCosForMode<27>(__m128 svaluesse, __m128 cvaluesse, int maxc)
+inline SIMD_M128 valueFromSinAndCosForMode<27>(SIMD_M128 svaluesse, SIMD_M128 cvaluesse, int maxc)
 {
     // Sine 2x in first half
-    const auto mz = _mm_setzero_ps();
-    const auto m2 = _mm_set1_ps(2);
+    const auto mz = SIMD_MM(setzero_ps)();
+    const auto m2 = SIMD_MM(set1_ps)(2);
 
-    auto s2x = _mm_mul_ps(m2, _mm_mul_ps(svaluesse, cvaluesse));
+    auto s2x = SIMD_MM(mul_ps)(m2, SIMD_MM(mul_ps)(svaluesse, cvaluesse));
     auto qv = calcquadrantSSE(svaluesse, cvaluesse);
-    return _mm_div_ps(s2x, qv);
+    return SIMD_MM(div_ps)(s2x, qv);
 }
 
 // This is used by the legacy apis
 template <int mode> inline float singleValueFromSinAndCos(float sinx, float cosx)
 {
-    auto s = _mm_set1_ps(sinx);
-    auto c = _mm_set1_ps(cosx);
+    auto s = SIMD_MM(set1_ps)(sinx);
+    auto c = SIMD_MM(set1_ps)(cosx);
     auto r = valueFromSinAndCosForMode<mode>(s, c, 1);
     float v;
-    _mm_store_ss(&v, r);
+    SIMD_MM(store_ss)(&v, r);
     return v;
 }
 
@@ -619,86 +644,101 @@ void SineOscillator::process_block_internal(float pitch, float drift, float fmde
     fv = limit_range(fv, -1.0e6f, 1.0e6f);
 
     FMdepth.newValue(fv);
-    FB.newValue(abs(fb_val));
+    FB.newValue(fb_val);
 
     float p alignas(16)[MAX_UNISON];
-    float sx alignas(16)[MAX_UNISON];
-    float cx alignas(16)[MAX_UNISON];
     float olv alignas(16)[MAX_UNISON];
     float orv alignas(16)[MAX_UNISON];
 
     for (int i = 0; i < MAX_UNISON; ++i)
         p[i] = 0.0;
 
-    auto outattensse = _mm_set1_ps(out_attenuation);
-    auto fbnegmask = _mm_cmplt_ps(_mm_set1_ps(fb_val), _mm_setzero_ps());
-    __m128 playramp[4], dramp[4];
+    auto outattensse = SIMD_MM(set1_ps)(out_attenuation);
+    SIMD_M128 playramp[4], dramp[4];
     if (firstblock)
     {
         for (int i = 0; i < 4; ++i)
         {
-            playramp[i] = _mm_set1_ps(0.0);
-            dramp[i] = _mm_set1_ps(BLOCK_SIZE_OS_INV);
+            playramp[i] = SIMD_MM(set1_ps)(0.0);
+            dramp[i] = SIMD_MM(set1_ps)(BLOCK_SIZE_OS_INV);
         }
         float tv alignas(16)[4];
-        _mm_store_ps(tv, playramp[0]);
+        SIMD_MM(store_ps)(tv, playramp[0]);
         tv[0] = 1.0;
-        playramp[0] = _mm_load_ps(tv);
+        playramp[0] = SIMD_MM(load_ps)(tv);
 
-        _mm_store_ps(tv, dramp[0]);
+        SIMD_MM(store_ps)(tv, dramp[0]);
         tv[0] = 0.0;
-        dramp[0] = _mm_load_ps(tv);
+        dramp[0] = SIMD_MM(load_ps)(tv);
     }
     else
     {
         for (int i = 0; i < 4; ++i)
         {
-            playramp[i] = _mm_set1_ps(1.0);
-            dramp[i] = _mm_setzero_ps();
+            playramp[i] = SIMD_MM(set1_ps)(1.0);
+            dramp[i] = SIMD_MM(setzero_ps)();
         }
     }
     firstblock = false;
+
+    auto fb_mode = oscdata->p[sine_feedback].deform_type;
+
+    auto fb0weight = SIMD_MM(setzero_ps)();
+    auto fb1weight = SIMD_MM(set1_ps)(1.f);
+
+    if (fb_mode == 1)
+    {
+        fb0weight = SIMD_MM(set1_ps)(0.5f);
+        fb1weight = SIMD_MM(set1_ps)(0.5f);
+    }
+
     for (int k = 0; k < BLOCK_SIZE_OS; k++)
     {
         float outL = 0.f, outR = 0.f;
 
         float fmpd = FM ? FMdepth.v * master_osc[k] : 0.f;
-        auto fmpds = _mm_set1_ps(fmpd);
-        auto fbv = _mm_set1_ps(FB.v);
+        auto fmpds = SIMD_MM(set1_ps)(fmpd);
+        auto fbv = SIMD_MM(set1_ps)(std::fabs(FB.v));
+        auto fbnegmask = SIMD_MM(cmplt_ps)(SIMD_MM(set1_ps)(FB.v), SIMD_MM(setzero_ps)());
 
         for (int u = 0; u < n_unison; u += 4)
         {
             float fph alignas(16)[4] = {(float)phase[u], (float)phase[u + 1], (float)phase[u + 2],
                                         (float)phase[u + 3]};
-            auto ph = _mm_load_ps(&fph[0]);
-            auto lv = _mm_load_ps(&lastvalue[u]);
-            auto x = _mm_add_ps(_mm_add_ps(ph, lv), fmpds);
+            auto ph = SIMD_MM(load_ps)(&fph[0]);
+            auto lv0 = SIMD_MM(load_ps)(&lastvalue[0][u]);
+            auto lv1 = SIMD_MM(load_ps)(&lastvalue[1][u]);
 
-            x = Surge::DSP::clampToPiRangeSSE(x);
+            auto lv =
+                SIMD_MM(add_ps)(SIMD_MM(mul_ps)(lv0, fb0weight), SIMD_MM(mul_ps)(lv1, fb1weight));
+            auto fba =
+                SIMD_MM(mul_ps)(SIMD_MM(add_ps)(SIMD_MM(and_ps)(fbnegmask, SIMD_MM(mul_ps)(lv, lv)),
+                                                SIMD_MM(andnot_ps)(fbnegmask, lv)),
+                                fbv);
+            auto x = SIMD_MM(add_ps)(SIMD_MM(add_ps)(ph, fba), fmpds);
 
-            auto sxl = Surge::DSP::fastsinSSE(x);
-            auto cxl = Surge::DSP::fastcosSSE(x);
+            x = sst::basic_blocks::dsp::clampToPiRangeSSE(x);
+
+            auto sxl = sst::basic_blocks::dsp::fastsinSSE(x);
+            auto cxl = sst::basic_blocks::dsp::fastcosSSE(x);
 
             auto out_local = valueFromSinAndCosForMode<mode>(sxl, cxl, std::min(n_unison - u, 4));
 
-            auto pl = _mm_load_ps(&panL[u]);
-            auto pr = _mm_load_ps(&panR[u]);
+            auto pl = SIMD_MM(load_ps)(&panL[u]);
+            auto pr = SIMD_MM(load_ps)(&panR[u]);
 
             auto ui = u >> 2;
             auto ramp = playramp[ui];
-            auto olpr = _mm_mul_ps(out_local, ramp);
-            playramp[ui] = _mm_add_ps(playramp[ui], dramp[ui]);
+            auto olpr = SIMD_MM(mul_ps)(out_local, ramp);
+            playramp[ui] = SIMD_MM(add_ps)(playramp[ui], dramp[ui]);
 
-            auto l = _mm_mul_ps(_mm_mul_ps(pl, olpr), outattensse);
-            auto r = _mm_mul_ps(_mm_mul_ps(pr, olpr), outattensse);
-            _mm_store_ps(&olv[u], l);
-            _mm_store_ps(&orv[u], r);
+            auto l = SIMD_MM(mul_ps)(SIMD_MM(mul_ps)(pl, olpr), outattensse);
+            auto r = SIMD_MM(mul_ps)(SIMD_MM(mul_ps)(pr, olpr), outattensse);
+            SIMD_MM(store_ps)(&olv[u], l);
+            SIMD_MM(store_ps)(&orv[u], r);
 
-            auto lastv =
-                _mm_mul_ps(_mm_add_ps(_mm_and_ps(fbnegmask, _mm_mul_ps(out_local, out_local)),
-                                      _mm_andnot_ps(fbnegmask, out_local)),
-                           fbv);
-            _mm_store_ps(&lastvalue[u], lastv);
+            SIMD_MM(store_ps)(&lastvalue[0][u], lv1);
+            SIMD_MM(store_ps)(&lastvalue[1][u], out_local);
         }
 
         for (int u = 0; u < n_unison; ++u)
@@ -790,8 +830,9 @@ void SineOscillator::process_block_legacy(float pitch, float drift, bool stereo,
 
             for (int u = 0; u < n_unison; u++)
             {
-                float out_local = singleValueFromSinAndCos<mode>(Surge::DSP::fastsin(phase[u]),
-                                                                 Surge::DSP::fastcos(phase[u]));
+                float out_local =
+                    singleValueFromSinAndCos<mode>(sst::basic_blocks::dsp::fastsin(phase[u]),
+                                                   sst::basic_blocks::dsp::fastcos(phase[u]));
 
                 outL += (panL[u] * out_local) * out_attenuation * playingramp[u];
                 outR += (panR[u] * out_local) * out_attenuation * playingramp[u];
@@ -802,7 +843,7 @@ void SineOscillator::process_block_legacy(float pitch, float drift, bool stereo,
                     playingramp[u] = 1;
 
                 phase[u] += omega[u] + master_osc[k] * FMdepth.v;
-                phase[u] = Surge::DSP::clampToPiRange(phase[u]);
+                phase[u] = sst::basic_blocks::dsp::clampToPiRange(phase[u]);
             }
 
             FMdepth.process();
@@ -1070,6 +1111,7 @@ void SineOscillator::handleStreamingMismatches(int streamingRevision,
     if (streamingRevision <= 15)
     {
         oscdata->retrigger.val.b = true;
+        charFilt.doFilter = false;
     }
 }
 

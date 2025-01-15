@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "ModulationEditor.h"
 #include "SurgeSynthesizer.h"
@@ -23,6 +30,7 @@
 #include "widgets/ModulatableSlider.h"
 #include "widgets/MultiSwitch.h"
 #include "SurgeJUCEHelpers.h"
+#include <fmt/core.h>
 
 namespace Surge
 {
@@ -44,8 +52,9 @@ struct ModulationSideControls : public juce::Component,
     };
 
     ModulationEditor *editor{nullptr};
-    ModulationSideControls(ModulationEditor *e) : editor(e)
+    ModulationSideControls(ModulationEditor *e, SurgeGUIEditor *sge) : editor(e)
     {
+        this->sge = sge;
         setAccessible(true);
         setTitle("Controls");
         setDescription("Controls");
@@ -56,7 +65,6 @@ struct ModulationSideControls : public juce::Component,
         auto makeL = [this](const std::string &s) {
             auto l = std::make_unique<juce::Label>(s);
             l->setText(s, juce::dontSendNotification);
-            l->setFont(Surge::GUI::getFontManager()->getLatoAtSize(9, juce::Font::bold));
             if (skin)
                 l->setColour(juce::Label::textColourId, skin->getColor(Colors::MSEGEditor::Text));
             l->setAccessible(true);
@@ -88,6 +96,7 @@ struct ModulationSideControls : public juce::Component,
             w->setWantsKeyboardFocus(true);
             w->setTitle(acctitle);
             w->setDescription(acctitle);
+            w->setStorage(&(editor->synth->storage));
             addAndMakeVisible(*w);
             return w;
         };
@@ -122,12 +131,22 @@ struct ModulationSideControls : public juce::Component,
         dispL = makeL("Value Display");
         dispW = makeW({"None", "Depths", "Values and Depths", "Values, Depths and Ranges"},
                       tag_value_disp, true, "Value Displays", true);
+        dispW->setAccessible(false);
 
         auto dwv = Surge::Storage::getUserDefaultValue(&(editor->synth->storage),
                                                        Storage::ModListValueDisplay, 3);
         dispW->setValue(dwv / 3.0);
         dispW->setDraggable(true);
         valueChanged(dispW.get());
+
+        copyW = std::make_unique<Surge::Widgets::SelfDrawButton>("Copy to Clipboard");
+        copyW->setAccessible(true);
+        copyW->setStorage(&(editor->synth->storage));
+        copyW->setTitle("Copy to Clipboard");
+        copyW->setDescription("Copy to Clipboard");
+        copyW->setSkin(skin);
+        copyW->onClick = [this]() { doCopyToClipboard(); };
+        addAndMakeVisible(*copyW);
     }
 
     void resized() override
@@ -159,6 +178,9 @@ struct ModulationSideControls : public juce::Component,
         dispL->setBounds(b);
         b = b.translated(0, h);
         dispW->setBounds(b.withHeight(h * 4));
+
+        b = b.translated(0, h * 4.5 + m);
+        copyW->setBounds(b);
     }
 
     void paint(juce::Graphics &g) override
@@ -172,6 +194,41 @@ struct ModulationSideControls : public juce::Component,
     }
 
     void valueChanged(GUI::IComponentTagValue *c) override;
+    int32_t controlModifierClicked(GUI::IComponentTagValue *p, const juce::ModifierKeys &mods,
+                                   bool isDoubleClickEvent) override
+    {
+        auto tag = p->getTag();
+
+        switch (tag)
+        {
+        case tag_filter_by:
+        case tag_add_source:
+        case tag_add_target:
+            valueChanged(p);
+            return true;
+        case tag_sort_by:
+        case tag_value_disp:
+            auto men = juce::PopupMenu();
+            auto st = &(editor->synth->storage);
+            auto msurl = st ? sge->helpURLForSpecial(st, "mod-list") : std::string();
+            auto hurl = SurgeGUIEditor::fullyResolvedHelpURL(msurl);
+            std::string name =
+                (tag == tag_sort_by) ? "Sort Modulation List" : "Modulation List Value Display";
+
+            auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(name, hurl);
+
+            tcomp->setSkin(skin, associatedBitmapStore);
+            tcomp->setCentered(false);
+
+            auto hment = tcomp->getTitle();
+            men.addCustomItem(-1, std::move(tcomp), nullptr, hment);
+
+            men.showMenuAsync(sge->popupMenuOptions());
+
+            return true;
+        }
+        return true;
+    }
 
     modsources add_ms;
     int add_ms_idx, add_ms_sc;
@@ -193,15 +250,23 @@ struct ModulationSideControls : public juce::Component,
         if (sortL && skin)
         {
             sortL->setColour(juce::Label::textColourId, skin->getColor(Colors::MSEGEditor::Text));
+            sortL->setFont(skin->fontManager->getLatoAtSize(9, juce::Font::bold));
             filterL->setColour(juce::Label::textColourId, skin->getColor(Colors::MSEGEditor::Text));
+            filterL->setFont(skin->fontManager->getLatoAtSize(9, juce::Font::bold));
             addL->setColour(juce::Label::textColourId, skin->getColor(Colors::MSEGEditor::Text));
+            addL->setFont(skin->fontManager->getLatoAtSize(9, juce::Font::bold));
             dispL->setColour(juce::Label::textColourId, skin->getColor(Colors::MSEGEditor::Text));
+            dispL->setFont(skin->fontManager->getLatoAtSize(9, juce::Font::bold));
         }
     }
+
+    void doCopyToClipboard();
 
     std::unique_ptr<juce::Label> sortL, filterL, addL, dispL;
     std::unique_ptr<Surge::Widgets::MultiSwitchSelfDraw> sortW, filterW, addSourceW, addTargetW,
         dispW;
+    std::unique_ptr<Surge::Widgets::SelfDrawButton> copyW;
+    SurgeGUIEditor *sge;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ModulationSideControls);
 };
@@ -210,39 +275,65 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
 {
     struct ModListIconButton : public Surge::Widgets::TinyLittleIconButton
     {
-        ModListIconButton(int off, std::function<void()> cb)
-            : Surge::Widgets::TinyLittleIconButton(off, std::move(cb))
+        SurgeStorage *storage{nullptr};
+        ModListIconButton(int off, std::function<void()> cb, SurgeStorage *s)
+            : Surge::Widgets::TinyLittleIconButton(off, std::move(cb)), storage(s)
         {
         }
 
-        std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler()
+        std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
         {
             return std::make_unique<juce::AccessibilityHandler>(
                 *this, juce::AccessibilityRole::button,
                 juce::AccessibilityActions().addAction(juce::AccessibilityActionType::press,
                                                        [this]() { this->callback(); }));
         }
+
+        bool keyPressed(const juce::KeyPress &key) override
+        {
+            if (!storage)
+                return false;
+            auto [action, mod] = Surge::Widgets::accessibleEditAction(key, storage);
+            if (action == Widgets::Return)
+            {
+                callback();
+                return true;
+            }
+            return false;
+        }
+
+        std::function<void()> onFocusFromTabFn{nullptr};
+        void focusGained(FocusChangeType cause) override
+        {
+            if (onFocusFromTabFn && cause == FocusChangeType::focusChangedByTabKey)
+            {
+                onFocusFromTabFn();
+            }
+        }
     };
     ModulationEditor *editor{nullptr};
     ModulationListContents(ModulationEditor *e) : editor(e)
     {
-        sortOrder = (SortOrder)e->synth->storage.getPatch()
-                        .dawExtraState.editor.modulationEditorState.sortOrder;
+        auto &mes = e->synth->storage.getPatch().dawExtraState.editor.modulationEditorState;
+        sortOrder = (SortOrder)mes.sortOrder;
 
-        filterOn = (FilterOn)editor->synth->storage.getPatch()
-                       .dawExtraState.editor.modulationEditorState.filterOn;
+        filterOn = (FilterOn)mes.filterOn;
         switch (filterOn)
         {
         case NONE:
             clearFilters();
             break;
         case SOURCE:
-            filterBySource(editor->synth->storage.getPatch()
-                               .dawExtraState.editor.modulationEditorState.filterString);
+            filterBySource(mes.filterString);
             break;
         case TARGET:
-            filterByTarget(editor->synth->storage.getPatch()
-                               .dawExtraState.editor.modulationEditorState.filterString);
+            filterByTarget(mes.filterString);
+            break;
+        case TARGET_CG:
+            filterByTargetControlGroup((ControlGroup)mes.filterInt, mes.filterString);
+            break;
+        case TARGET_SCENE:
+            filterByTargetScene(mes.filterInt, mes.filterString);
             break;
         }
 
@@ -253,7 +344,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
     {
         if (rows.empty())
         {
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(20));
+            g.setFont(skin->fontManager->getLatoAtSize(20));
             g.setColour(skin->getColor(Colors::ModulationListOverlay::DimText));
             g.drawText("No Modulations Assigned", getLocalBounds(), juce::Justification::centred);
         }
@@ -266,6 +357,8 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
         bool isBipolar;
         bool isPerScene;
         int idBase;
+        int pscene;
+        ControlGroup pControlGroup;
         float moddepth01;
         bool isMuted;
         ModulationDisplayInfoWindowStrings mss;
@@ -292,41 +385,84 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
         static constexpr int height = 32;
         Datum datum;
         ModulationListContents *contents{nullptr};
+        int idx{0};
 
-        DataRowEditor(const Datum &d, ModulationListContents *c) : datum(d), contents(c)
+        DataRowEditor(const Datum &d, int idxi, ModulationListContents *c)
+            : datum(d), idx(idxi), contents(c)
         {
-            clearButton = std::make_unique<ModListIconButton>(1, [this]() {
-                auto me = contents->editor;
-                ModulationEditor::SelfModulationGuard g(me);
-                me->synth->clearModulation(datum.destination_id + datum.idBase,
-                                           (modsources)datum.source_id, datum.source_scene,
-                                           datum.source_index);
-                // The rebuild may delete this so defer
-                auto c = contents;
-                juce::Timer::callAfterDelay(1, [c, me]() {
-                    c->rebuildFrom(me->synth);
-                    me->ed->queue_refresh = true;
-                });
-            });
+            clearButton = std::make_unique<ModListIconButton>(
+                1,
+                [this]() {
+                    auto me = contents->editor;
+                    contents->preferredFocusRow = idx;
+                    ModulationEditor::SelfModulationGuard g(me);
+                    contents->editor->ed->pushModulationToUndoRedo(
+                        datum.destination_id + datum.idBase, (modsources)datum.source_id,
+                        datum.source_scene, datum.source_index, Surge::GUI::UndoManager::UNDO);
+                    me->synth->clearModulation(datum.destination_id + datum.idBase,
+                                               (modsources)datum.source_id, datum.source_scene,
+                                               datum.source_index, false);
+                    // The rebuild may delete this so defer
+                    auto c = contents;
+                    juce::Timer::callAfterDelay(1, [c, me]() {
+                        c->rebuildFrom(me->synth);
+                        me->ed->queue_refresh = true;
+                    });
+                },
+                &c->editor->synth->storage);
             clearButton->setAccessible(true);
             clearButton->setTitle("Clear");
             clearButton->setDescription("Clear");
             clearButton->setWantsKeyboardFocus(true);
+            clearButton->onFocusFromTabFn = [this]() {
+                int nAbove = 7;
+                if (idx >= nAbove)
+                {
+                    auto p = idx - nAbove;
+                    int off = (p == 0 ? 0 : -1);
+                    contents->editor->viewport->setViewPosition(0, p * height + off);
+                }
+            };
             addAndMakeVisible(*clearButton);
 
             muted = d.isMuted;
-            muteButton = std::make_unique<ModListIconButton>(2, [this]() {
-                auto me = contents->editor;
-                ModulationEditor::SelfModulationGuard g(me);
-                me->synth->muteModulation(datum.destination_id + datum.idBase,
-                                          (modsources)datum.source_id, datum.source_scene,
-                                          datum.source_index, !muted);
-                muted = !muted;
-                contents->rebuildFrom(me->synth);
-            });
+            muteButton = std::make_unique<ModListIconButton>(
+                2,
+                [this]() {
+                    auto me = contents->editor;
+                    contents->preferredFocusRow = idx;
+                    ModulationEditor::SelfModulationGuard g(me);
+                    contents->editor->ed->pushModulationToUndoRedo(
+                        datum.destination_id + datum.idBase, (modsources)datum.source_id,
+                        datum.source_scene, datum.source_index, Surge::GUI::UndoManager::UNDO);
+
+                    me->synth->muteModulation(datum.destination_id + datum.idBase,
+                                              (modsources)datum.source_id, datum.source_scene,
+                                              datum.source_index, !muted);
+                    muted = !muted;
+                    contents->rebuildFrom(me->synth);
+                },
+                &c->editor->synth->storage);
             muteButton->setAccessible(true);
             muteButton->setWantsKeyboardFocus(true);
             addAndMakeVisible(*muteButton);
+
+            pencilButton = std::make_unique<ModListIconButton>(
+                0,
+                [this]() {
+                    auto sge = contents->editor->ed;
+                    contents->preferredFocusRow = idx;
+                    auto p = contents->editor->synth->storage.getPatch()
+                                 .param_ptr[datum.destination_id + datum.idBase];
+                    sge->promptForUserValueEntry(p, pencilButton.get(), datum.source_id,
+                                                 datum.source_scene, datum.source_index);
+                },
+                &c->editor->synth->storage);
+            pencilButton->setAccessible(true);
+            pencilButton->setTitle("Edit");
+            pencilButton->setDescription("Edit");
+            pencilButton->setWantsKeyboardFocus(true);
+            addAndMakeVisible(*pencilButton);
 
             surgeLikeSlider = std::make_unique<Surge::Widgets::ModulatableSlider>();
             surgeLikeSlider->setOrientation(Surge::ParamConfig::kHorizontal);
@@ -339,6 +475,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             surgeLikeSlider->setTitle("Depth");
             surgeLikeSlider->setDescription("Depth");
             surgeLikeSlider->setWantsKeyboardFocus(true);
+            surgeLikeSlider->customToAccessibleString = [this] { return datum.mss.dvalplus; };
             addAndMakeVisible(*surgeLikeSlider);
 
             setAccessible(true);
@@ -346,21 +483,60 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             resetValuesFromDatum();
         }
 
+        void controlBeginEdit(GUI::IComponentTagValue *control) override
+        {
+            auto synth = contents->editor->ed->synth;
+            for (auto l : contents->editor->ed->synth->modListeners)
+            {
+                auto p = synth->storage.getPatch().param_ptr[datum.destination_id + datum.idBase];
+
+                auto nm01 = control->getValue() * 2.f - 1.f;
+
+                l->modBeginEdit(p->id, (modsources)datum.source_id, datum.source_scene,
+                                datum.source_index, nm01);
+            }
+        }
+
+        void controlEndEdit(GUI::IComponentTagValue *control) override
+        {
+            auto synth = contents->editor->ed->synth;
+            for (auto l : contents->editor->ed->synth->modListeners)
+            {
+                auto p = synth->storage.getPatch().param_ptr[datum.destination_id + datum.idBase];
+
+                auto nm01 = control->getValue() * 2.f - 1.f;
+
+                l->modEndEdit(p->id, (modsources)datum.source_id, datum.source_scene,
+                              datum.source_index, nm01);
+            }
+        }
+
         void resetValuesFromDatum()
         {
+            std::string accPostfix = datum.sname + " to " + datum.pname;
+
             surgeLikeSlider->setValue((datum.moddepth01 + 1) * 0.5);
             surgeLikeSlider->setQuantitizedDisplayValue((datum.moddepth01 + 1) * 0.5);
             surgeLikeSlider->setIsModulationBipolar(datum.isBipolar);
+            surgeLikeSlider->setTitle("Depth " + accPostfix);
+            surgeLikeSlider->setDescription("Depth " + accPostfix);
 
             muteButton->offset = 2;
-            muteButton->setTitle("Mute");
-            muteButton->setDescription("Mute");
+            muteButton->setTitle("Mute " + accPostfix);
+            muteButton->setDescription("Mute " + accPostfix);
+
             if (datum.isMuted)
             {
-                muteButton->setTitle("UnMute");
-                muteButton->setDescription("UnMute");
+                muteButton->setTitle("UnMute " + accPostfix);
+                muteButton->setDescription("UnMute " + accPostfix);
                 muteButton->offset = 3;
             }
+
+            clearButton->setTitle("Clear " + accPostfix);
+            clearButton->setDescription("Clear " + accPostfix);
+
+            pencilButton->setTitle("Edit " + accPostfix);
+            pencilButton->setDescription("Edit " + accPostfix);
 
             auto t = std::string("Source: ") + datum.sname + (" to  Target: ") + datum.pname;
             setTitle(t);
@@ -369,6 +545,29 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             repaint();
         }
 
+        void beTheFocusedRow()
+        {
+            if (!contents->editor)
+                return;
+            if (!contents->editor->viewport)
+                return;
+            if (!surgeLikeSlider->isVisible())
+                return;
+
+            int nAbove = 7;
+            if (idx >= nAbove)
+            {
+                auto p = idx - nAbove;
+                int off = (p == 0 ? 0 : -1);
+                contents->editor->viewport->setViewPosition(0, p * height + off);
+            }
+            else
+            {
+                contents->editor->viewport->setViewPosition(0, 0);
+            }
+            if (surgeLikeSlider->isShowing())
+                surgeLikeSlider->grabKeyboardFocus();
+        }
         bool firstInSort{false}, hasFollower{false};
         bool isTop{false}, isAfterTop{false}, isLast{false};
 
@@ -394,7 +593,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             g.drawLine(indent, 0, indent, getHeight(), 1);
             g.drawLine(getWidth() - indent, 0, getWidth() - indent, getHeight(), 1);
 
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            g.setFont(skin->fontManager->getLatoAtSize(9));
             g.setColour(skin->getColor(Colors::ModulationListOverlay::Text));
 
             int fh = g.getCurrentFont().getHeight();
@@ -461,7 +660,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             {
                 g.setColour(skin->getColor(Colors::ModulationListOverlay::DimText));
                 auto tf = g.getCurrentFont();
-                g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(7));
+                g.setFont(skin->fontManager->getLatoAtSize(7));
                 tb = tb.withTop(0);
                 g.drawText(firstLab, tb.withTrimmedLeft(2), juce::Justification::topLeft);
                 g.setFont(tf);
@@ -472,7 +671,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
                 return;
             }
 
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            g.setFont(skin->fontManager->getLatoAtSize(9));
             auto sb = surgeLikeSlider->getBounds();
             auto bb = sb.withY(0).withHeight(getHeight()).reduced(0, 1);
 
@@ -493,17 +692,18 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             {
                 g.setColour(skin->getColor(Colors::Slider::Modulation::Positive));
                 g.drawFittedText(datum.mss.dvalplus, rb, juce::Justification::topLeft, 1, 0.1);
+
+                if (datum.isBipolar)
+                {
+                    g.setColour(skin->getColor(Colors::Slider::Modulation::Negative));
+                    g.drawFittedText(datum.mss.dvalminus, lb, juce::Justification::topRight, 1,
+                                     0.1);
+                }
             }
 
             if ((contents->valueDisplay & EXTRAS) == 0)
             {
                 return;
-            }
-
-            if (datum.isBipolar)
-            {
-                g.setColour(skin->getColor(Colors::Slider::Modulation::Negative));
-                g.drawFittedText(datum.mss.dvalminus, lb, juce::Justification::topRight, 1, 0.1);
             }
 
             g.setColour(skin->getColor(Colors::Slider::Modulation::Positive));
@@ -516,8 +716,8 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             }
         }
 
-        static constexpr int controlsStart = 150;
-        static constexpr int controlsEnd = controlsStart + (14 + 2) * 2 + 140 + 2;
+        static constexpr int controlsStart = 160;
+        static constexpr int controlsEnd = controlsStart + (14 + 2) * 3 + 140 + 2;
 
         void resized() override
         {
@@ -530,7 +730,10 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             clearButton->setBounds(startX, bY, bh, bh);
             startX += bh + 2;
             muteButton->setBounds(startX, bY, bh, bh);
+            startX += bh + 2;
+            pencilButton->setBounds(startX, bY, bh, bh);
             startX += bh + 70;
+
             surgeLikeSlider->setBounds(startX, sY, 140, sh);
         }
 
@@ -546,7 +749,10 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
 
                 auto p = synth->storage.getPatch().param_ptr[datum.destination_id + datum.idBase];
 
-                synth->setModulation(datum.destination_id + datum.idBase,
+                contents->editor->ed->pushModulationToUndoRedo(
+                    p->id, (modsources)datum.source_id, datum.source_scene, datum.source_index,
+                    Surge::GUI::UndoManager::UNDO);
+                synth->setModDepth01(datum.destination_id + datum.idBase,
                                      (modsources)datum.source_id, datum.source_scene,
                                      datum.source_index, nm01);
 
@@ -572,12 +778,14 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
         {
             clearButton->icons = associatedBitmapStore->getImage(IDB_MODMENU_ICONS);
             muteButton->icons = associatedBitmapStore->getImage(IDB_MODMENU_ICONS);
+            pencilButton->icons = associatedBitmapStore->getImage(IDB_MODMENU_ICONS);
             surgeLikeSlider->setSkin(skin, associatedBitmapStore);
         }
 
         bool muted{false};
         std::unique_ptr<ModListIconButton> clearButton;
         std::unique_ptr<ModListIconButton> muteButton;
+        std::unique_ptr<ModListIconButton> pencilButton;
         std::unique_ptr<Surge::Widgets::ModulatableSlider> surgeLikeSlider;
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DataRowEditor);
     };
@@ -620,12 +828,15 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
     } sortOrder{BY_SOURCE};
 
     std::string filterString;
+    int filterInt;
 
     enum FilterOn
     {
         NONE,
         SOURCE,
-        TARGET
+        TARGET,
+        TARGET_SCENE,
+        TARGET_CG
     } filterOn{NONE};
 
     void clearFilters()
@@ -664,6 +875,30 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             s;
     }
 
+    void filterByTargetScene(int s, const std::string &lb)
+    {
+        filterOn = TARGET_SCENE;
+        filterInt = s;
+        rebuildFrom(editor->synth);
+        editor->synth->storage.getPatch().dawExtraState.editor.modulationEditorState.filterOn =
+            (int)TARGET_SCENE;
+        editor->synth->storage.getPatch().dawExtraState.editor.modulationEditorState.filterInt = s;
+        editor->synth->storage.getPatch().dawExtraState.editor.modulationEditorState.filterString =
+            lb;
+    }
+
+    void filterByTargetControlGroup(ControlGroup c, const std::string &lb)
+    {
+        filterOn = TARGET_CG;
+        filterInt = c;
+        rebuildFrom(editor->synth);
+        editor->synth->storage.getPatch().dawExtraState.editor.modulationEditorState.filterOn =
+            (int)TARGET_CG;
+        editor->synth->storage.getPatch().dawExtraState.editor.modulationEditorState.filterInt = c;
+        editor->synth->storage.getPatch().dawExtraState.editor.modulationEditorState.filterString =
+            lb;
+    }
+
     /*
      * Rows is the visible UI, dataRows is the entire set of data. In the case of filtered
      * displays, it is not the case that rows[i].datum == dataRows[i]
@@ -688,25 +923,29 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
         {
             std::string pfx = p->scene == 1 ? "A " : "B ";
             p->create_fullname(p->get_name(), nm, p->ctrlgroup, p->ctrlgroup_entry,
-                               (pfx + editor->ed->modulatorName(p->ctrlgroup_entry, true)).c_str());
+                               (pfx + ModulatorName::modulatorName(
+                                          &synth->storage, p->ctrlgroup_entry, true, p->scene))
+                                   .c_str());
         }
         else
         {
             if (synth->fromSynthSideId(d.destination_id + d.idBase, ptagid))
                 synth->getParameterName(ptagid, nm);
         }
+        d.pscene = p->scene;
+        d.pControlGroup = p->ctrlgroup;
 
-        std::string sname = editor->ed->modulatorNameWithIndex(
-            d.source_scene, d.source_id, d.source_index, false, d.inScene < 0);
+        std::string sname = ModulatorName::modulatorNameWithIndex(
+            &synth->storage, d.source_scene, d.source_id, d.source_index, false, d.inScene < 0);
 
         d.sname = sname + sceneMod;
         d.pname = nm;
 
-        char pdisp[256];
+        char pdisp[TXT_SIZE];
         int ptag = p->id;
         auto thisms = (modsources)d.source_id;
 
-        d.moddepth01 = synth->getModulation(ptag, thisms, d.source_scene, d.source_index);
+        d.moddepth01 = synth->getModDepth01(ptag, thisms, d.source_scene, d.source_index);
         d.isBipolar = synth->isBipolarModulation(thisms);
         d.isMuted = synth->isModulationMuted(ptag, thisms, d.source_scene, d.source_index);
         p->get_display_of_modulation_depth(
@@ -727,7 +966,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             if (r.empty())
                 return;
 
-            for (auto q : r)
+            for (const auto &q : r)
             {
                 Datum d;
                 d.source_scene = q.source_scene;
@@ -797,14 +1036,19 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
 
         std::string priorN = "-";
 
+        int idx = 0;
         for (const auto &d : dataRows)
         {
-            if (!(filterOn == NONE || (filterOn == SOURCE && d.sname == filterString) ||
-                  (filterOn == TARGET && d.pname == filterString)))
+            auto included = filterOn == NONE || (filterOn == SOURCE && d.sname == filterString) ||
+                            (filterOn == TARGET && d.pname == filterString) ||
+                            (filterOn == TARGET_CG && d.pControlGroup == filterInt) ||
+                            (filterOn == TARGET_SCENE && d.pscene == filterInt);
+
+            if (!included)
             {
                 continue;
             }
-            auto l = std::make_unique<DataRowEditor>(d, this);
+            auto l = std::make_unique<DataRowEditor>(d, idx++, this);
             auto sortName = sortOrder == BY_SOURCE ? d.sname : d.pname;
 
             l->setSkin(skin, associatedBitmapStore);
@@ -815,8 +1059,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
                 l->firstInSort = true;
             }
 
-            if (filterOn == NONE || (filterOn == SOURCE && d.sname == filterString) ||
-                (filterOn == TARGET && d.pname == filterString))
+            if (included)
             {
                 l->setBounds(0, ypos, getWidth(), DataRowEditor::height);
                 ypos += DataRowEditor::height;
@@ -874,7 +1117,15 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
         }
 
         moved(); // to refresh the 'istop'
+
+        if (preferredFocusRow < 0 || preferredFocusRow >= dataRows.size())
+            preferredFocusRow = 0;
+
+        if (preferredFocusRow >= 0 && preferredFocusRow < rows.size() && rows[preferredFocusRow])
+            rows[preferredFocusRow]->beTheFocusedRow();
     }
+
+    int preferredFocusRow{0};
 
     void updateAllValues(const SurgeSynthesizer *synth)
     {
@@ -897,7 +1148,7 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
             }
             else
             {
-                std::cout << "Skipping an element " << std::endl;
+                // std::cout << "Skipping an element " << std::endl;
             }
         }
     }
@@ -905,8 +1156,19 @@ struct ModulationListContents : public juce::Component, public Surge::GUI::SkinC
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ModulationListContents);
 };
 
-void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
+void ModulationSideControls::doCopyToClipboard()
+{
+    std::ostringstream oss;
+    oss << "Modulation List for " << editor->ed->getStorage()->getPatch().name << "\n";
+    for (const auto &r : editor->modContents->dataRows)
+    {
+        oss << "  Source: " << r.sname << "; Target: " << r.pname << "; Depth:  " << r.mss.valplus
+            << " " << (r.isBipolar ? "(Bipolar)" : "(Unipolar)") << "\n";
+    }
+    juce::SystemClipboard::copyTextToClipboard(oss.str());
+}
 
+void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
 {
     auto tag = c->getTag();
     switch (tag)
@@ -914,10 +1176,16 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
     case tag_sort_by:
     {
         auto v = c->getValue();
+
         if (v > 0.5)
+        {
             editor->modContents->sortOrder = ModulationListContents::BY_TARGET;
+        }
         else
+        {
             editor->modContents->sortOrder = ModulationListContents::BY_SOURCE;
+        }
+
         editor->synth->storage.getPatch().dawExtraState.editor.modulationEditorState.sortOrder =
             editor->modContents->sortOrder;
         editor->modContents->rebuildFrom(editor->synth);
@@ -925,9 +1193,6 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
     break;
     case tag_filter_by:
     {
-        /*
-         * Make a popup menu to filter
-         */
         auto men = juce::PopupMenu();
         std::set<std::string> sources, targets;
 
@@ -937,28 +1202,9 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
             targets.insert(r.pname);
         }
 
-        // FIXME add help component
-
-        auto tcomp =
-            std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Filter Modulation List", "");
-
-        tcomp->setSkin(skin, associatedBitmapStore);
-
-        men.addCustomItem(-1, std::move(tcomp));
-
         if (!sources.empty() && !targets.empty())
         {
-            men.addSeparator();
-
-            men.addItem(Surge::GUI::toOSCaseForMenu("Clear Filter"), [this]() {
-                editor->modContents->clearFilters();
-                filterL->setText("Filter By", juce::NotificationType::dontSendNotification);
-                filterW->setLabels({"-"});
-            });
-
-            men.addSeparator();
-
-            men.addSectionHeader("BY SOURCE");
+            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men, "BY SOURCE");
 
             for (auto s : sources)
                 men.addItem(s, [this, s]() {
@@ -968,7 +1214,8 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
                     filterW->setLabels({s});
                 });
 
-            men.addSectionHeader("BY TARGET");
+            men.addColumnBreak();
+            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men, "BY TARGET");
 
             for (auto t : targets)
                 men.addItem(t, [this, t]() {
@@ -977,9 +1224,71 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
                                      juce::NotificationType::dontSendNotification);
                     filterW->setLabels({t});
                 });
+
+            men.addColumnBreak();
+            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men,
+                                                                            "BY TARGET SECTION");
+
+            for (int t = cg_GLOBAL; t < endCG; ++t)
+            {
+                if (t == 1)
+                    continue;
+
+                auto lab = fmt::format("{}", ControlGroupDisplay[t]);
+
+                men.addItem(lab, [this, t, lab]() {
+                    editor->modContents->filterByTargetControlGroup((ControlGroup)t, lab);
+                    filterL->setText("Filter By Target Section",
+                                     juce::NotificationType::dontSendNotification);
+                    filterW->setLabels({lab});
+                });
+            }
+
+            men.addColumnBreak();
+            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men, "BY TARGET SCENE");
+
+            for (int t = 0; t < n_scenes + 1; ++t)
+            {
+                auto lab = fmt::format("Scene {}", (char)('A' + (t - 1)));
+
+                if (t == 0)
+                {
+                    lab = "Global";
+                }
+
+                men.addItem(lab, [this, t, lab]() {
+                    editor->modContents->filterByTargetScene(t, lab);
+                    filterL->setText("Filter By Target Scene",
+                                     juce::NotificationType::dontSendNotification);
+                    filterW->setLabels({lab});
+                });
+            }
+
+            men.addSeparator();
+
+            men.addItem(Surge::GUI::toOSCase("Clear Filter"), [this]() {
+                editor->modContents->clearFilters();
+                filterL->setText("Filter By", juce::NotificationType::dontSendNotification);
+                filterW->setLabels({"-"});
+            });
+
+            men.addSeparator();
         }
 
-        men.showMenuAsync(juce::PopupMenu::Options(), GUI::makeEndHoverCallback(filterW.get()));
+        auto st = &(editor->synth->storage);
+        auto msurl = st ? sge->helpURLForSpecial(st, "mod-list") : std::string();
+        auto hurl = SurgeGUIEditor::fullyResolvedHelpURL(msurl);
+
+        auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(
+            "Filter Modulation List", hurl);
+
+        tcomp->setSkin(skin, associatedBitmapStore);
+        tcomp->setCentered(false);
+
+        auto hment = tcomp->getTitle();
+        men.addCustomItem(-1, std::move(tcomp), nullptr, hment);
+
+        men.showMenuAsync(sge->popupMenuOptions());
     }
     break;
     case tag_add_source:
@@ -1000,6 +1309,7 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
     case tag_value_disp:
     {
         int v = round(c->getValue() * 3);
+
         switch (v)
         {
         case 0:
@@ -1015,9 +1325,10 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
             editor->modContents->valueDisplay = ModulationListContents::ALL;
             break;
         }
-        editor->repaint();
+
         Surge::Storage::updateUserDefaultValue(&(editor->synth->storage),
                                                Storage::ModListValueDisplay, v);
+        editor->repaint();
     }
     break;
     }
@@ -1026,12 +1337,6 @@ void ModulationSideControls::valueChanged(GUI::IComponentTagValue *c)
 void ModulationSideControls::showAddSourceMenu()
 {
     auto men = juce::PopupMenu();
-
-    auto tcomp =
-        std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Add Modulation From", "");
-    tcomp->setSkin(skin, associatedBitmapStore);
-    men.addCustomItem(-1, std::move(tcomp));
-    men.addSeparator();
 
     auto addMacroSub = juce::PopupMenu();
     auto addVLFOASub = juce::PopupMenu();
@@ -1048,12 +1353,25 @@ void ModulationSideControls::showAddSourceMenu()
     juce::PopupMenu *popMenu{nullptr};
     auto synth = editor->synth;
     auto sge = editor->ed;
+
+    auto st = &(synth->storage);
+    auto msurl = st ? sge->helpURLForSpecial(st, "mod-list") : std::string();
+    auto hurl = SurgeGUIEditor::fullyResolvedHelpURL(msurl);
+
+    auto tcomp =
+        std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Add Modulation From", hurl);
+    auto hment = tcomp->getTitle();
+    tcomp->setSkin(skin, associatedBitmapStore);
+    men.addCustomItem(-1, std::move(tcomp), nullptr, hment);
+    men.addSeparator();
+
     for (int sc = 0; sc < n_scenes; ++sc)
     {
         for (int k = 1; k < n_modsources; k++)
         {
             modsources ms = (modsources)modsource_display_order[k];
             popMenu = nullptr;
+
             if (ms >= ms_ctrl1 && ms <= ms_ctrl1 + n_customcontrollers - 1 && sc == 0)
             {
                 popMenu = &addMacroSub;
@@ -1101,9 +1419,12 @@ void ModulationSideControls::showAddSourceMenu()
                 {
                     int maxidx = synth->getMaxModulationIndex(sc, ms);
                     auto subm = juce::PopupMenu();
+
                     for (int i = 0; i < maxidx; ++i)
                     {
-                        auto subn = sge->modulatorNameWithIndex(sc, ms, i, false, false);
+                        auto subn = ModulatorName::modulatorNameWithIndex(&synth->storage, sc, ms,
+                                                                          i, false, false);
+
                         subm.addItem(subn, [this, ms, i, sc, subn]() {
                             add_ms = ms;
                             add_ms_idx = i;
@@ -1115,12 +1436,16 @@ void ModulationSideControls::showAddSourceMenu()
                             repaint();
                         });
                     }
-                    popMenu->addSubMenu(
-                        sge->modulatorNameWithIndex(sc, ms, -1, false, false, false), subm);
+
+                    popMenu->addSubMenu(ModulatorName::modulatorNameWithIndex(
+                                            &synth->storage, sc, ms, -1, false, false, false),
+                                        subm);
                 }
                 else
                 {
-                    auto sn = sge->modulatorNameWithIndex(sc, ms, 0, false, false);
+                    auto sn = ModulatorName::modulatorNameWithIndex(&synth->storage, sc, ms, 0,
+                                                                    false, false);
+
                     popMenu->addItem(sn, [this, sn, sc, ms]() {
                         add_ms = ms;
                         add_ms_idx = 0;
@@ -1134,37 +1459,46 @@ void ModulationSideControls::showAddSourceMenu()
             }
         }
     }
-    men.addSectionHeader("GLOBAL");
+    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men, "GLOBAL");
     men.addSubMenu("Macros", addMacroSub);
     men.addSubMenu("MIDI", addMIDISub);
     men.addSubMenu("Internal", addMiscSub);
-    men.addSectionHeader("SCENE A");
+    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men, "SCENE A");
     men.addSubMenu("Voice LFOs", addVLFOASub);
     men.addSubMenu("Scene LFOs", addSLFOASub);
     men.addSubMenu("Envelopes", addEGASub);
     men.addSubMenu("MIDI", addMIDIASub);
-    men.addSectionHeader("SCENE B");
+    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men, "SCENE B");
     men.addSubMenu("Voice LFOs", addVLFOBSub);
     men.addSubMenu("Scene LFOs", addSLFOBSub);
     men.addSubMenu("Envelopes", addEGBSub);
     men.addSubMenu("MIDI", addMIDIBSub);
 
-    men.showMenuAsync(juce::PopupMenu::Options(), GUI::makeEndHoverCallback(addSourceW.get()));
+    men.showMenuAsync(sge->popupMenuOptions());
 }
 
 void ModulationSideControls::showAddTargetMenu()
 {
     if (!addTargetW->isEnabled())
+    {
         return;
+    }
+
+    auto synth = editor->synth;
 
     auto men = juce::PopupMenu();
 
-    auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Add Modulation To", "");
+    auto st = &(synth->storage);
+    auto msurl = st ? sge->helpURLForSpecial(st, "mod-list") : std::string();
+    auto hurl = SurgeGUIEditor::fullyResolvedHelpURL(msurl);
+
+    auto tcomp =
+        std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Add Modulation To", hurl);
+    auto hment = tcomp->getTitle();
     tcomp->setSkin(skin, associatedBitmapStore);
-    men.addCustomItem(-1, std::move(tcomp));
+    men.addCustomItem(-1, std::move(tcomp), nullptr, hment);
     men.addSeparator();
 
-    auto synth = editor->synth;
     std::array<std::map<int, std::map<int, std::vector<std::pair<int, std::string>>>>, n_scenes + 1>
         parsBySceneThenCGThenCGE;
     int SENTINEL_ENTRY = 10000001;
@@ -1257,7 +1591,8 @@ void ModulationSideControls::showAddTargetMenu()
             break;
         case 1000:
         case 1001:
-            return editor->ed->modulatorName(cge, false);
+            return ModulatorName::modulatorName(editor->ed->getStorage(), cge, false,
+                                                editor->ed->current_scene);
             break;
         default:
             return std::string("CGE=") + std::to_string(cge);
@@ -1275,13 +1610,14 @@ void ModulationSideControls::showAddTargetMenu()
             switch (si)
             {
             case 0:
-                men.addSectionHeader("GLOBAL");
+                Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(men, "GLOBAL");
                 break;
             default:
                 char ai = 'A';
                 ai += si;
                 ai -= 1;
-                men.addSectionHeader(std::string("SCENE ") + ai);
+                Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                    men, std::string("SCENE ") + ai);
                 break;
             }
         }
@@ -1355,16 +1691,19 @@ void ModulationSideControls::showAddTargetMenu()
         si++;
     }
 
-    men.showMenuAsync(juce::PopupMenu::Options(), GUI::makeEndHoverCallback(addTargetW.get()));
+    men.showMenuAsync(sge->popupMenuOptions());
 }
 
 void ModulationSideControls::doAdd()
 {
     auto synth = editor->synth;
-    synth->setModulation(dest_id, add_ms, add_ms_sc, add_ms_idx, 0.01);
+    editor->ed->pushModulationToUndoRedo(dest_id, add_ms, add_ms_sc, add_ms_idx,
+                                         Surge::GUI::UndoManager::UNDO);
+    synth->setModDepth01(dest_id, add_ms, add_ms_sc, add_ms_idx, 0.01);
     addSourceW->setLabels({"Select Source"});
     addTargetW->setLabels({"Select Target"});
     addTargetW->setEnabled(false);
+    addSourceW->grabKeyboardFocus();
     repaint();
 }
 
@@ -1390,7 +1729,7 @@ ModulationEditor::ModulationEditor(SurgeGUIEditor *ed, SurgeSynthesizer *s)
 
     synth->addModulationAPIListener(this);
 
-    sideControls = std::make_unique<ModulationSideControls>(this);
+    sideControls = std::make_unique<ModulationSideControls>(this, ed);
 
     addAndMakeVisible(*sideControls);
 }

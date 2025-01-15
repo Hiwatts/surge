@@ -1,19 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_COMMON_DSP_OSCILLATORS_WAVETABLEOSCILLATOR_H
+#define SURGE_SRC_COMMON_DSP_OSCILLATORS_WAVETABLEOSCILLATOR_H
 
 #include "OscillatorBase.h"
 #include "DSPUtils.h"
@@ -34,8 +42,15 @@ class WavetableOscillator : public AbstractBlitOscillator
         wt_unison_voices,
     };
 
+    enum FeatureDeform
+    {
+        XT_134_EARLIER = 0,
+        XT_14 = 1 << 0
+    };
+
     lipol_ps li_hpf, li_DC, li_integratormult;
-    WavetableOscillator(SurgeStorage *storage, OscillatorStorage *oscdata, pdata *localcopy);
+    WavetableOscillator(SurgeStorage *storage, OscillatorStorage *oscdata, pdata *localcopy,
+                        pdata *localcopyUnmod);
     virtual void init(float pitch, bool is_display = false,
                       bool nonzero_init_drift = true) override;
     virtual void init_ctrltypes() override;
@@ -46,10 +61,20 @@ class WavetableOscillator : public AbstractBlitOscillator
     virtual void handleStreamingMismatches(int streamingRevision,
                                            int currentSynthStreamingRevision) override;
 
+    void processSamplesForDisplay(float *samples, int size, bool real) override;
+
   private:
     void convolute(int voice, bool FM, bool stereo);
     template <bool is_init> void update_lagvals();
     inline float distort_level(float);
+    void readDeformType();
+    void selectDeform();
+    float getMorph();
+    float deformLegacy(float, int);
+    float deformContinuous(float, int);
+    float deformMorph(float, int);
+
+    float (WavetableOscillator::*deformSelected)(float, int);
     bool first_run;
     float oscpitch[MAX_UNISON];
     float dc, dc_uni[MAX_UNISON], last_level[MAX_UNISON];
@@ -64,4 +89,8 @@ class WavetableOscillator : public AbstractBlitOscillator
     int nointerp;
     float FMmul_inv;
     int sampleloop;
+    pdata *unmodulatedLocalcopy;
+    FeatureDeform deformType;
 };
+
+#endif // SURGE_SRC_COMMON_DSP_OSCILLATORS_WAVETABLEOSCILLATOR_H

@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "MiniEdit.h"
 #include "SkinModel.h"
@@ -21,6 +28,7 @@
 #include "SurgeGUIEditor.h"
 #include "widgets/SurgeTextButton.h"
 #include "AccessibleHelpers.h"
+#include "OverlayUtils.h"
 
 namespace Surge
 {
@@ -32,7 +40,6 @@ MiniEdit::MiniEdit()
     setAccessible(true);
     typein = std::make_unique<juce::TextEditor>("minieditTypein");
     typein->setJustification(juce::Justification::centred);
-    typein->setFont(Surge::GUI::getFontManager()->getLatoAtSize(11));
     typein->setSelectAllWhenFocused(true);
     typein->setWantsKeyboardFocus(true);
     typein->addListener(this);
@@ -56,56 +63,26 @@ MiniEdit::~MiniEdit() {}
 
 juce::Rectangle<int> MiniEdit::getDisplayRegion()
 {
-    auto fullRect = juce::Rectangle<int>(0, 0, 180, 80).withCentre(getBounds().getCentre());
+    auto fullRect = juce::Rectangle<int>(0, 0, 180, 90).withCentre(getBounds().getCentre());
     return fullRect;
 }
 
 void MiniEdit::paint(juce::Graphics &g)
 {
-    if (!skin || !associatedBitmapStore)
-    {
-        // This is a software error obvs
-        g.fillAll(juce::Colours::red);
-        return;
-    }
-
-    g.fillAll(skin->getColor(Colors::Overlay::Background));
-
     auto fullRect = getDisplayRegion();
+    auto labelRect = fullRect.withTrimmedTop(18).withHeight(20).reduced(6, 0);
 
-    auto tbRect = fullRect.withHeight(18);
-
-    g.setColour(skin->getColor(Colors::Dialog::Titlebar::Background));
-    g.fillRect(tbRect);
-    g.setColour(skin->getColor(Colors::Dialog::Titlebar::Text));
-    g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(10, juce::Font::bold));
-    g.drawText(title, tbRect, juce::Justification::centred);
-
-    auto d = associatedBitmapStore->getImage(IDB_SURGE_ICON);
-
-    if (d)
-    {
-        d->drawAt(g, fullRect.getX() + 2, fullRect.getY() + 2, 1.0);
-    }
-
-    auto bodyRect = fullRect.withTrimmedTop(18);
-
-    g.setColour(skin->getColor(Colors::Dialog::Background));
-    g.fillRect(bodyRect);
+    paintOverlayWindow(g, skin, associatedBitmapStore, fullRect, title);
 
     g.setColour(skin->getColor(Colors::Dialog::Label::Text));
-    g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
-
-    auto labelRect = bodyRect.withHeight(20).reduced(6, 0);
-
+    g.setFont(skin->fontManager->getLatoAtSize(9));
     g.drawText(label, labelRect, juce::Justification::centredLeft);
-
-    g.setColour(skin->getColor(Colors::Dialog::Border));
-    g.drawRect(fullRect.expanded(1), 2);
 }
 
 void MiniEdit::onSkinChanged()
 {
+    typein->setFont(skin->fontManager->getLatoAtSize(11));
+
     typein->setColour(juce::TextEditor::backgroundColourId,
                       skin->getColor(Colors::Dialog::Entry::Background));
     typein->setColour(juce::TextEditor::textColourId, skin->getColor(Colors::Dialog::Entry::Text));
@@ -126,7 +103,7 @@ void MiniEdit::onSkinChanged()
 
 void MiniEdit::resized()
 {
-    auto typeinHeight = 18, margin = 2, btnWidth = 40;
+    auto typeinHeight = 18, margin = 2, btnHeight = 17, btnWidth = 50;
 
     auto fullRect = getDisplayRegion();
     auto dialogCenter = fullRect.getWidth() / 2;
@@ -138,10 +115,11 @@ void MiniEdit::resized()
     typein->setBounds(typeinBox);
     typein->setIndents(4, (typein->getHeight() - typein->getTextHeight()) / 2);
 
-    auto buttonRow = fullRect.translated(0, (3 * typeinHeight) + (margin * 3) + 2)
-                         .withHeight(typeinHeight - 4)
-                         .withTrimmedLeft(margin)
-                         .withTrimmedRight(margin);
+    auto buttonRow =
+        fullRect.translated(0, fullRect.getBottom() - typeinBox.getBottom() + typeinHeight + 15)
+            .withHeight(btnHeight)
+            .withTrimmedLeft(margin)
+            .withTrimmedRight(margin);
     auto okRect = buttonRow.withTrimmedLeft(dialogCenter - btnWidth - margin).withWidth(btnWidth);
     auto canRect = buttonRow.withTrimmedLeft(dialogCenter + margin).withWidth(btnWidth);
 

@@ -1,21 +1,31 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_COMMON_MODULATIONSOURCE_H
+#define SURGE_SRC_COMMON_MODULATIONSOURCE_H
 
 #include <random>
+#include <cassert>
+
 #include "basic_dsp.h"
 
 enum modsrctype
@@ -81,13 +91,13 @@ const int modsource_display_order[n_modsources] = {
     ms_lowest_key,
     ms_highest_key,
     ms_latest_key,
-    ms_polyaftertouch,
     ms_aftertouch,
+    ms_polyaftertouch,
+    ms_pitchbend,
     ms_modwheel,
     ms_breath,
     ms_expression,
     ms_sustain,
-    ms_pitchbend,
     ms_timbre,
     ms_alternate_bipolar,
     ms_alternate_unipolar,
@@ -118,51 +128,30 @@ const int modsource_display_order[n_modsources] = {
 };
 
 const int n_customcontrollers = 8;
-extern float samplerate_inv;
-extern float samplerate;
 
 const char modsource_names_button[n_modsources][32] = {
-    "Off",
-    "Velocity",
-    "Keytrack",
-    "Poly AT",
-    "Channel AT",
-    "Pitch Bend",
-    "Modwheel",
-    "Macro 1",
-    "Macro 2",
-    "Macro 3",
-    "Macro 4",
-    "Macro 5",
-    "Macro 6",
-    "Macro 7",
-    "Macro 8",
-    "Amp EG",
-    "Filter EG",
-    "LFO 1",
-    "LFO 2",
-    "LFO 3",
-    "LFO 4",
-    "LFO 5",
-    "LFO 6",
-    "S-LFO 1",
-    "S-LFO 2",
-    "S-LFO 3",
-    "S-LFO 4",
-    "S-LFO 5",
-    "S-LFO 6",
-    "MPE Timbre",
-    "Release Velocity",
-    "Random",
-    "Rand Uni",
-    "Alternate",
-    "Alternate Uni",
-    "Breath",
-    "Expression",
+    "Off",         "Velocity",
+    "Keytrack",    "Poly AT",
+    "Channel AT", // note there is an override of this in SGE modulatorName for MPE
+    "Pitch Bend",  "Modwheel",
+    "Macro 1",     "Macro 2",
+    "Macro 3",     "Macro 4",
+    "Macro 5",     "Macro 6",
+    "Macro 7",     "Macro 8",
+    "Amp EG",      "Filter EG",
+    "LFO 1",       "LFO 2",
+    "LFO 3",       "LFO 4",
+    "LFO 5",       "LFO 6",
+    "S-LFO 1",     "S-LFO 2",
+    "S-LFO 3",     "S-LFO 4",
+    "S-LFO 5",     "S-LFO 6",
+    "Timbre",      "Release Velocity",
+    "Random",      "Rand Uni",
+    "Alternate",   "Alternate Uni",
+    "Breath",      "Expression",
     "Sustain",
     "Lowest Key", // "key/voice is now an index
-    "Highest Key",
-    "Latest Key",
+    "Highest Key", "Latest Key",
 };
 
 const char modsource_names[n_modsources][32] = {
@@ -172,7 +161,7 @@ const char modsource_names[n_modsources][32] = {
     "Polyphonic Aftertouch",
     "Channel Aftertouch",
     "Pitch Bend",
-    "Modulation Wheel",
+    "Modwheel",
     "Macro 1",
     "Macro 2",
     "Macro 3",
@@ -195,7 +184,7 @@ const char modsource_names[n_modsources][32] = {
     "Scene LFO 4",
     "Scene LFO 5",
     "Scene LFO 6",
-    "MPE Timbre",
+    "Timbre",
     "Release Velocity",
     "Random Bipolar",
     "Random Unipolar",
@@ -209,13 +198,14 @@ const char modsource_names[n_modsources][32] = {
     "Latest Key",
 };
 
+// these names are used for streaming (TODO XT2) and OSC interface - don't change them!
 const char modsource_names_tag[n_modsources][32] = {
-    "off",    "vel",    "keytrack",    "poly_at",    "chan_at",     "pbend",      "mwheel",
-    "macro1", "macro2", "macro3",      "macro4",     "macro5",      "macro6",     "macro7",
-    "macro8", "amp_eg", "filter_eg",   "lfo1",       "lfo2",        "lfo3",       "lfo4",
-    "lfo5",   "lfo6",   "slfo1",       "slfo2",      "slfo3",       "slfo4",      "slfo5",
-    "slfo6",  "timbre", "release_vel", "random",     "random_uni",  "alt",        "alt_uni",
-    "breath", "expr",   "sustain",     "lowest_key", "highest_key", "latest_key",
+    "off",     "vel",     "keytrk",  "pat",        "at",          "pb",         "mw",
+    "macro_1", "macro_2", "macro_3", "macro_4",    "macro_5",     "macro_6",    "macro_7",
+    "macro_8", "aeg",     "feg",     "vlfo_1",     "vlfo_2",      "vlfo_3",     "vlfo_4",
+    "vlfo_5",  "vlfo_6",  "slfo_1",  "slfo_2",     "slfo_3",      "slfo_4",     "slfo_5",
+    "slfo_6",  "timbre",  "rel_vel", "rand_bi",    "rand_uni",    "alt_bi",     "alt_uni",
+    "breath",  "expr",    "sus",     "lowest_key", "highest_key", "latest_key",
 };
 
 inline bool isScenelevel(modsources ms)
@@ -246,6 +236,20 @@ inline bool canModulateVoiceModulators(modsources ms)
     return (ms <= ms_ctrl8) || ms == ms_timbre;
 }
 
+class SurgeStorage;
+
+namespace ModulatorName
+{
+std::string modulatorName(const SurgeStorage *s, int ms, bool forButton, int current_scene,
+                          int forScene = -1);
+std::string modulatorIndexExtension(const SurgeStorage *s, int scene, int ms, int index,
+                                    bool shortV = false);
+std::string modulatorNameWithIndex(const SurgeStorage *s, int scene, int ms, int index,
+                                   bool forButton, bool useScene, bool baseNameOnly = false);
+bool supportsIndexedModulator(int scene, modsources modsource);
+
+} // namespace ModulatorName
+
 struct ModulationRouting
 {
     int source_id;
@@ -267,8 +271,11 @@ class ModulationSource
     ModulationSource()
     {
         for (int i = 0; i < vecsize; ++i)
+        {
             voutput[i] = 0.f;
+        }
     }
+
     virtual ~ModulationSource() {}
     virtual const char *get_title() { return 0; }
     virtual int get_type() { return mst_undefined; }
@@ -276,40 +283,67 @@ class ModulationSource
     virtual void attack(){};
     virtual void release(){};
     virtual void reset(){};
+
     // override these if you support indices
     virtual void set_active_outputs(int ao) { active_outputs = ao; }
     virtual int get_active_outputs() { return active_outputs; }
-    virtual float get_output(int which)
+
+    virtual float get_output(int which) const
     {
         if (which == 0)
+        {
             return output;
+        }
         else if (which < vecsize)
+        {
             return voutput[which];
+        }
         else
+        {
             return 0.f;
+        }
     }
-    virtual float get_output01(int which)
+
+    virtual float get_output01(int which) const
     {
         if (which == 0)
+        {
             return output;
+        }
         else if (which < vecsize)
+        {
             return voutput[which];
+        }
         else
+        {
             return 0.f;
+        }
     }
+
     virtual void set_output(int which, float f)
     {
         if (which == 0)
+        {
             output = f;
+        }
         else if (which < vecsize)
+        {
             voutput[which] = f;
+        }
     }
 
     virtual bool per_voice() { return false; }
     virtual bool is_bipolar() { return false; }
     virtual void set_bipolar(bool b) {}
 
+    inline void set_samplerate(float sr, float sri)
+    {
+        samplerate = sr;
+        samplerate_inv = sri;
+    }
+
   protected:
+    float samplerate{0}, samplerate_inv{0};
     int active_outputs{0};
     static constexpr int vecsize = 16;
     float output, voutput[vecsize];
@@ -330,7 +364,7 @@ enum SmoothingMode
 template <int NDX = 1> class ControllerModulationSourceVector : public ModulationSource
 {
   public:
-    // Smoothing and Shaping Behaviors
+    // smoothing and shaping behaviors
     Modulator::SmoothingMode smoothingMode = Modulator::SmoothingMode::LEGACY;
 
     ControllerModulationSourceVector()
@@ -344,6 +378,7 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
         smoothingMode = Modulator::SmoothingMode::LEGACY;
         bipolar = false;
     }
+
     ControllerModulationSourceVector(Modulator::SmoothingMode mode)
         : ControllerModulationSourceVector()
     {
@@ -370,6 +405,7 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
         assert(NDX == 1);
         init(0, f);
     }
+
     void init(int idx, float f)
     {
         target[idx] = f;
@@ -392,27 +428,41 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
     void set_target01(int idx, float f, bool updatechanged = true)
     {
         if (bipolar)
+        {
             target[idx] = 2.f * f - 1.f;
+        }
         else
+        {
             target[idx] = f;
+        }
+
         startingpoint[idx] = value[idx];
+
         if (updatechanged)
+        {
             changed[idx] = true;
+        }
     }
 
-    virtual float get_output(int which) override { return value[which]; }
+    virtual float get_output(int which) const override { return value[which]; }
 
-    virtual float get_output01(int i) override
+    virtual float get_output01(int i) const override
     {
         if (bipolar)
+        {
             return 0.5f + 0.5f * value[i];
+        }
+
         return value[i];
     }
 
     virtual float get_target01(int idx)
     {
         if (bipolar)
+        {
             return 0.5f + 0.5f * target[idx];
+        }
+
         return target[idx];
     }
 
@@ -421,9 +471,13 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
         if (changed[idx])
         {
             if (reset)
+            {
                 changed[idx] = false;
+            }
+
             return true;
         }
+
         return false;
     }
 
@@ -433,12 +487,14 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
         {
             target[idx] = 0.f;
             value[idx] = 0.f;
-            value[idx] = 0.f;
             bipolar = false;
         }
     }
+
     inline void processSmoothing(Modulator::SmoothingMode mode, float sigma)
     {
+        assert(samplerate > 1000);
+
         for (int idx = 0; idx < NDX; ++idx)
         {
             if (mode == Modulator::SmoothingMode::LEGACY ||
@@ -446,28 +502,34 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
                 mode == Modulator::SmoothingMode::FAST_EXP)
             {
                 float b = fabs(target[idx] - value[idx]);
+
                 if (b < sigma && mode != Modulator::SmoothingMode::LEGACY)
                 {
                     value[idx] = target[idx];
                 }
                 else
                 {
-                    float a = (mode == Modulator::SmoothingMode::FAST_EXP ? 0.99f : 0.9f) * 44100 *
-                              samplerate_inv * b;
+                    // Don't allow us to push outside of [target,value]
+                    // so clamp the interpolator to 0,1
+                    float a =
+                        std::clamp((mode == Modulator::SmoothingMode::FAST_EXP ? 0.99f : 0.9f) *
+                                       44100 * samplerate_inv * b,
+                                   0.f, 1.f);
+
                     value[idx] = (1 - a) * value[idx] + a * target[idx];
                 }
+
                 return;
             };
+
             if (mode == Modulator::SmoothingMode::FAST_LINE)
             {
-                /*
-                 * Apply a constant change until we get there.
-                 * Rate is set so we cover the entire range (0,1)
-                 * in 50 blocks at 44k
-                 */
+                // Apply a constant change until we get there
+                // Rate is set so we cover the entire [0, 1] range in 50 blocks at 44.1k
                 float sampf = samplerate / 44100;
                 float da = (target[idx] - startingpoint[idx]) / (50 * sampf);
                 float b = target[idx] - value[idx];
+
                 if (fabs(b) < fabs(da))
                 {
                     value[idx] = target[idx];
@@ -477,30 +539,42 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
                     value[idx] += da;
                 }
             }
+
             if (mode == Modulator::SmoothingMode::DIRECT)
             {
                 value[idx] = target[idx];
             }
+
+            // Just in case #6835 sneaks back
+            assert(!std::isnan(value[idx]) && !std::isinf(value[idx]));
         }
     }
+
     virtual void process_block() override
     {
+        assert(samplerate > 1000);
+
         processSmoothing(smoothingMode,
                          smoothingMode == Modulator::SmoothingMode::FAST_EXP ? 0.005f : 0.0025f);
     }
 
     virtual bool process_block_until_close(float sigma)
     {
-        if (smoothingMode == Modulator::SmoothingMode::LEGACY)
-            processSmoothing(Modulator::SmoothingMode::SLOW_EXP, sigma);
-        else
-            processSmoothing(smoothingMode, sigma);
+        assert(samplerate > 1000);
 
-        auto res = (value[0] != target[0]);
-        for (int i = 1; i < NDX; ++i)
+        const auto sm = smoothingMode == Modulator::SmoothingMode::LEGACY
+                            ? Modulator::SmoothingMode::SLOW_EXP
+                            : smoothingMode;
+
+        processSmoothing(sm, sigma);
+
+        bool res = true;
+
+        for (int i = 0; (i < NDX) && res; ++i)
         {
             res &= (value[i] != target[i]);
         }
+
         return res;
     }
 
@@ -514,6 +588,44 @@ template <int NDX = 1> class ControllerModulationSourceVector : public Modulatio
 };
 
 using ControllerModulationSource = ControllerModulationSourceVector<1>;
+
+struct MacroModulationSource : ControllerModulationSource
+{
+    MacroModulationSource(Modulator::SmoothingMode mode)
+        : ControllerModulationSource(mode), modunderlyer(mode)
+    {
+        modunderlyer.init(0);
+    }
+
+    virtual float get_output(int which) const override
+    {
+        return value[which] + modunderlyer.get_output(which);
+    }
+
+    virtual float get_output01(int i) const override
+    {
+        if (bipolar)
+            return 0.5f + 0.5f * (value[i] + modunderlyer.value[i]);
+        return value[i] + modunderlyer.value[i];
+    }
+
+    void setModulationDepth(float d) { modunderlyer.set_target(d); }
+
+    ControllerModulationSource modunderlyer;
+    void process_block() override
+    {
+        modunderlyer.set_samplerate(samplerate, samplerate_inv);
+        modunderlyer.process_block();
+        return ControllerModulationSource::process_block();
+    }
+
+    bool process_block_until_close(float sigma) override
+    {
+        modunderlyer.set_samplerate(samplerate, samplerate_inv);
+        modunderlyer.process_block_until_close(sigma);
+        return ControllerModulationSource::process_block_until_close(sigma);
+    }
+};
 
 class RandomModulationSource : public ModulationSource
 {
@@ -539,7 +651,7 @@ class RandomModulationSource : public ModulationSource
         return 2; // bipolar can't support lognormal obvs
     }
 
-    float get_output(int which) override { return output[which]; }
+    float get_output(int which) const override { return output[which]; }
 
     virtual void attack() override
     {
@@ -587,3 +699,5 @@ class AlternateModulationSource : public ModulationSource
     bool state;
     float nv, pv;
 };
+
+#endif // SURGE_SRC_COMMON_MODULATIONSOURCE_H

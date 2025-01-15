@@ -1,4 +1,26 @@
-#pragma once
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+#ifndef SURGE_SRC_COMMON_DSP_EFFECTS_CHOWDSP_BBD_UTILS_BBDFILTERBANK_H
+#define SURGE_SRC_COMMON_DSP_EFFECTS_CHOWDSP_BBD_UTILS_BBDFILTERBANK_H
 
 #include "SSEComplex.h"
 #include "portable_intrinsics.h"
@@ -30,10 +52,10 @@ constexpr std::complex<float> oFiltPole[] = {
     {-51468.0f, -21437.0f}, {-51468.0f, +21437.0f}, {-26276.0f, -59699.0f}, {-26276.0f, +59699.0f}};
 } // namespace FilterSpec
 
-inline SSEComplex fast_complex_pow(__m128 angle, float b)
+inline SSEComplex fast_complex_pow(SIMD_M128 angle, float b)
 {
-    const __m128 scalar = _mm_set1_ps(b);
-    auto angle_pow = _mm_mul_ps(angle, scalar);
+    const auto scalar = SIMD_MM(set1_ps)(b);
+    auto angle_pow = SIMD_MM(mul_ps)(angle, scalar);
     return SSEComplex::fastExp(angle_pow);
 }
 
@@ -85,7 +107,7 @@ struct InputFilterBank
 
     inline void process(float u)
     {
-        x = pole_corr * x + SSEComplex(_mm_set1_ps(u), _mm_set1_ps(0.0f));
+        x = pole_corr * x + SSEComplex(SIMD_MM(set1_ps)(u), SIMD_MM(set1_ps)(0.0f));
     }
 
     SSEComplex x;
@@ -96,7 +118,7 @@ struct InputFilterBank
     SSEComplex poles;
     SSEComplex root_corr;
     SSEComplex pole_corr;
-    __m128 pole_corr_angle;
+    SIMD_M128 pole_corr_angle;
 
     SSEComplex Aplus;
 
@@ -162,10 +184,12 @@ struct OutputFilterBank
     SSEComplex poles;
     SSEComplex root_corr;
     SSEComplex pole_corr;
-    __m128 pole_corr_angle;
+    SIMD_M128 pole_corr_angle;
 
     SSEComplex Aplus;
 
     const float Ts;
     SSEComplex Amult;
 };
+
+#endif // SURGE_SRC_COMMON_DSP_EFFECTS_CHOWDSP_BBD_UTILS_BBDFILTERBANK_H

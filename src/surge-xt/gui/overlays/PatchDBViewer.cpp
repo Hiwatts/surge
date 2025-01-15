@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "PatchDBViewer.h"
 #include "PatchDB.h"
@@ -59,7 +66,7 @@ struct PatchDBSQLTreeViewItem : public SharedTreeViewItem
         void paintItem(juce::Graphics &g, int width, int height) override
         {
             juce::TreeViewItem::paintItem(g, width, height);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            // g.setFont(skin->fontManager->getLatoAtSize(9));
             g.drawText(text, 2, 0, width - 2, height, juce::Justification::centredLeft);
         }
 
@@ -78,7 +85,7 @@ struct PatchDBSQLTreeViewItem : public SharedTreeViewItem
         void paintItem(juce::Graphics &g, int width, int height) override
         {
             juce::TreeViewItem::paintItem(g, width, height);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            // g.setFont(skin->fontManager->getLatoAtSize(9));
             g.drawText(cat.leaf_name, 2, 0, width - 2, height, juce::Justification::centredLeft);
         }
 
@@ -111,7 +118,7 @@ struct PatchDBSQLTreeViewItem : public SharedTreeViewItem
         void paintItem(juce::Graphics &g, int width, int height) override
         {
             juce::TreeViewItem::paintItem(g, width, height);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            // g.setFont(skin->fontManager->getLatoAtSize(9));
             std::string text = "Factory";
             g.setColour(juce::Colours::black);
             if (type == PatchStorage::PatchDB::THIRD_PARTY)
@@ -156,7 +163,7 @@ struct PatchDBSQLTreeViewItem : public SharedTreeViewItem
         void paintItem(juce::Graphics &g, int width, int height) override
         {
             juce::TreeViewItem::paintItem(g, width, height);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            // g.setFont(skin->fontManager->getLatoAtSize(9));
             g.drawText(juce::CharPointer_UTF8(feature.c_str()), 2, 0, width - 2, height,
                        juce::Justification::centredLeft);
         }
@@ -169,7 +176,7 @@ struct PatchDBSQLTreeViewItem : public SharedTreeViewItem
                 if (type == 1)
                 {
                     auto res = storage->patchDB->readAllFeatureValueString(feature);
-                    for (auto r : res)
+                    for (const auto &r : res)
                         addSubItem(new TextSubItem(editor, storage, r));
                 }
                 else
@@ -206,7 +213,7 @@ struct PatchDBSQLTreeViewItem : public SharedTreeViewItem
         void paintItem(juce::Graphics &g, int width, int height) override
         {
             juce::TreeViewItem::paintItem(g, width, height);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            // g.setFont(skin->fontManager->getLatoAtSize(9));
             std::string text = "";
             switch (type)
             {
@@ -261,10 +268,10 @@ struct PatchDBSQLTreeViewItem : public SharedTreeViewItem
     bool mightContainSubItems() override { return true; }
     void paintItem(juce::Graphics &g, int width, int height) override
     {
-        // TODO surge logo
-        g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+        // TODO: Surge XT logo
+        // g.setFont(skin->fontManager->getLatoAtSize(9));
         g.setColour(juce::Colours::black);
-        g.drawText("Surge", 2, 0, width - 2, height, juce::Justification::centredLeft);
+        g.drawText("Surge XT", 2, 0, width - 2, height, juce::Justification::centredLeft);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PatchDBSQLTreeViewItem);
@@ -311,7 +318,7 @@ class PatchDBSQLTableModel : public juce::TableListBoxModel
             s = d.author;
             break;
         }
-        g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+        // g.setFont(skin->fontManager->getLatoAtSize(9));
         g.drawText(s, 0, 0, width, height, juce::Justification::centredLeft);
     }
 
@@ -396,7 +403,7 @@ void PatchDBViewer::createElements()
     jobCountdown->setColour(juce::Label::backgroundColourId,
                             juce::Colour(0xFF, 0x90, 0).withAlpha(0.4f));
     jobCountdown->setJustificationType(juce::Justification::centred);
-    jobCountdown->setFont(Surge::GUI::getFontManager()->getFiraMonoAtSize(36));
+    // jobCountdown->setFont(skin->fontManager->getFiraMonoAtSize(36));
     addChildComponent(*jobCountdown);
 
     if (storage->patchDB->numberOfJobsOutstanding() > 0)
