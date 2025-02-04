@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "MSEGEditor.h"
 #include "MSEGModulationHelper.h"
@@ -67,7 +74,7 @@ struct MSEGControlRegion : public juce::Component,
 {
     MSEGControlRegion(MSEGCanvas *c, SurgeStorage *storage, LFOStorage *lfos, MSEGStorage *ms,
                       MSEGEditor::State *eds, Surge::GUI::Skin::ptr_t skin,
-                      std::shared_ptr<SurgeImageStore> b)
+                      std::shared_ptr<SurgeImageStore> b, SurgeGUIEditor *sge)
         : juce::Component("MSEG Control Region")
     {
         setSkin(skin, b);
@@ -76,6 +83,7 @@ struct MSEGControlRegion : public juce::Component,
         this->lfodata = lfos;
         this->canvas = c;
         this->storage = storage;
+        this->sge = sge;
         setAccessible(true);
         setTitle("Controls");
         setDescription("Controls");
@@ -110,17 +118,21 @@ struct MSEGControlRegion : public juce::Component,
     std::unique_ptr<Surge::Widgets::NumberField> hSnapSize, vSnapSize;
     std::vector<std::unique_ptr<juce::Label>> labels;
 
+    void hvSnapTypein(bool isH);
+
     MSEGStorage *ms = nullptr;
     MSEGEditor::State *eds = nullptr;
     MSEGCanvas *canvas = nullptr;
     LFOStorage *lfodata = nullptr;
     SurgeStorage *storage = nullptr;
+    SurgeGUIEditor *sge = nullptr;
 };
 
 struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComponent
 {
     MSEGCanvas(SurgeStorage *storage, LFOStorage *lfodata, MSEGStorage *ms, MSEGEditor::State *eds,
-               Surge::GUI::Skin::ptr_t skin, std::shared_ptr<SurgeImageStore> b)
+               Surge::GUI::Skin::ptr_t skin, std::shared_ptr<SurgeImageStore> b,
+               SurgeGUIEditor *sge)
         : juce::Component("MSEG Canvas")
     {
         setSkin(skin, b);
@@ -128,6 +140,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
         this->ms = ms;
         this->eds = eds;
         this->lfodata = lfodata;
+        this->sge = sge;
         Surge::MSEG::rebuildCache(ms);
         handleDrawable = b->getImage(IDB_MSEG_NODES);
         timeEditMode = (MSEGCanvas::TimeEdit)eds->timeEditMode;
@@ -135,6 +148,16 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
         setTitle("MSEG Display and Edit Canvas");
         setDescription("MSEG Display and Edit Canvas");
     };
+
+    enum SegmentProps
+    {
+        duration,
+        value,
+        cp_duration,
+        cp_value,
+    };
+
+    std::unique_ptr<Surge::Overlays::TypeinLambdaEditor> typeinEditor;
 
     /*
     ** We make a list of hotzones when we draw so we don't have to recalculate the
@@ -146,12 +169,11 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
         juce::Rectangle<float> drawRect;
         bool useDrawRect = false;
         int associatedSegment;
-        bool specialEndpoint =
-            false; // For pan and zoom we need to treat the endpoint of the last segment specially
         bool active = false;
         bool dragging = false;
+        // For pan and zoom we need to treat the endpoint of the last segment specially
+        bool specialEndpoint = false;
 
-        // More coming soon
         enum Type
         {
             MOUSABLE_NODE,
@@ -197,7 +219,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                             .reduced(drawInsertX, drawInsertY)
                             .withTrimmedBottom(axisSpaceY)
                             .withTrimmedLeft(axisSpaceX)
-                            .withTrimmedTop(5);
+                            .withTrimmedTop(4);
         return drawArea;
     }
 
@@ -510,11 +532,8 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             if (ms->segments[i].duration > 0.01 &&
                 ms->segments[i].type != MSEGStorage::segment::HOLD)
             {
-                /*
-                 * Drop in a control point. But where and moving how?
-                 *
-                 * Here's some good defaults
-                 */
+                // Drop in a control point. But where and moving how?
+                // Here's some good defaults
                 bool verticalMotion = true;
                 bool horizontalMotion = false;
                 bool verticalScaleByValues = false;
@@ -557,22 +576,22 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     tLocation =
                         ms->segments[i].cpduration * ms->segments[i].duration + ms->segmentStart[i];
 
-                // std::cout << _D(i) << _D(ms->segments[i].type) << _D(ms->segments[i].cpv) <<
-                // _D(ms->segments[i].cpduration) << _D(verticalMotion) << _D(verticalScaleByValues)
-                // << _D(horizontalMotion) << _D(vLocation ) << _D(tLocation) <<
-                // _D(ms->segmentStart[i] ) << std::endl;
-
                 float t = tpx(tLocation);
                 float v = valpx(vLocation);
                 auto h = hotzone();
+
                 h.rect =
                     juce::Rectangle<float>(juce::Point<float>(t - handleRadius, v - handleRadius),
                                            juce::Point<float>(t + handleRadius, v + handleRadius));
                 h.type = hotzone::Type::MOUSABLE_NODE;
+
                 if (h.rect.contains(where.getX(), where.getY()))
+                {
                     h.active = true;
+                }
 
                 h.useDrawRect = false;
+
                 if ((verticalMotion && !horizontalMotion &&
                      (ms->segments[i].type != MSEGStorage::segment::LINEAR &&
                       ms->segments[i].type != MSEGStorage::segment::BUMP)) ||
@@ -580,6 +599,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                 {
                     float t = tpx(0.5 * ms->segments[i].duration + ms->segmentStart[i]);
                     float v = valpx(0.5 * (ms->segments[i].nv1 + ms->segments[i].v0));
+
                     h.drawRect = juce::Rectangle<float>(
                         juce::Point<float>(t - handleRadius, v - handleRadius),
                         juce::Point<float>(t + handleRadius, v + handleRadius));
@@ -596,8 +616,14 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     if (verticalMotion)
                     {
                         float dv = 0;
+
                         if (verticalScaleByValues)
-                            dv = -2 * dy / vscale / (0.5 * segdx);
+                        {
+                            if (segdx == 0)
+                                dv = 0;
+                            else
+                                dv = -2 * dy / vscale / (0.5 * segdx);
+                        }
                         else
                             dv = -2 * dy / vscale;
 
@@ -637,13 +663,19 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
                         ms->segments[i].cpv += dv;
                     }
+
                     if (horizontalMotion)
+                    {
                         ms->segments[i].cpduration += dx / tscale / segdt;
+                    }
+
                     Surge::MSEG::constrainControlPointAt(ms, i);
                     modelChanged(i);
                 };
+
                 h.associatedSegment = i;
                 h.zoneSubType = hotzone::SEGMENT_CONTROL;
+
                 if (verticalMotion && horizontalMotion)
                     h.segmentDirection = hotzone::BOTH_DIRECTIONS;
                 else if (horizontalMotion)
@@ -665,8 +697,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             {
                 rectForPoint(
                     tpx(ms->totalDuration),
-                    ms->segments[ms->n_activeSegments - 1]
-                        .nv1, /* which is [0].v0 in lock mode only */
+                    ms->segments[ms->n_activeSegments - 1].nv1, // which is [0].v0 in lock mode only
                     hotzone::SEGMENT_ENDPOINT,
                     [this, vscale, tscale, unipolarFactor](float dx, float dy,
                                                            const juce::Point<float> &where) {
@@ -675,7 +706,9 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                             float d = -2 * dy / vscale;
                             float snapResolution = ms->vSnap * unipolarFactor;
                             int idx = ms->n_activeSegments - 1;
+
                             offsetValue(ms->segments[idx].dragv1, d);
+
                             if (snapResolution <= 0)
                                 ms->segments[idx].nv1 = ms->segments[idx].dragv1;
                             else
@@ -683,6 +716,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                                 float q = ms->segments[idx].dragv1 + 1;
                                 float pos = round(q / snapResolution) * snapResolution;
                                 float adj = pos - 1.0;
+
                                 ms->segments[idx].nv1 = limit_range(adj, -1.f, 1.f);
                             }
                         }
@@ -690,6 +724,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                         {
                             adjustValue(0, false, -2 * dy / vscale, ms->vSnap);
                         }
+
                         // We need to deal with the cpduration also
                         auto cpv = this->ms->segments[ms->n_activeSegments - 1].cpduration /
                                    this->ms->segments[ms->n_activeSegments - 1].duration;
@@ -700,6 +735,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                             if (!this->getLocalBounds().contains(where.toInt()))
                             {
                                 auto howFar = where.x - this->getLocalBounds().getRight();
+
                                 if (howFar > 0)
                                     dx *= howFar * 0.1; // this is really just a speedup as our axes
                                                         // shrinks. Just a fudge
@@ -709,6 +745,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                                 ms, ms->n_activeSegments - 1, dx / tscale, ms->hSnap, longestMSEG);
                         }
                     });
+
                 hotzones.back().specialEndpoint = true;
             }
         }
@@ -780,8 +817,8 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
     inline void drawAxis(juce::Graphics &g)
     {
-        auto primaryFont = Surge::GUI::getFontManager()->getLatoAtSize(9, juce::Font::bold);
-        auto secondaryFont = Surge::GUI::getFontManager()->getLatoAtSize(7);
+        auto primaryFont = skin->fontManager->getLatoAtSize(9, juce::Font::bold);
+        auto secondaryFont = skin->fontManager->getLatoAtSize(7);
 
         auto haxisArea = getHAxisArea();
         auto tpx = timeToPx();
@@ -792,6 +829,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
         {
             int ls = (ms->loop_start >= 0 ? ms->loop_start : 0);
             int le = (ms->loop_end >= 0 ? ms->loop_end : ms->n_activeSegments - 1);
+
             float pxs = limit_range((float)tpx(ms->segmentStart[ls]), (float)haxisArea.getX(),
                                     (float)haxisArea.getRight());
             float pxe = limit_range((float)tpx(ms->segmentEnd[le]), (float)haxisArea.getX(),
@@ -810,15 +848,14 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             auto mcolor = skin->getColor(Colors::MSEGEditor::Loop::Marker);
 
             // draw loop markers
-            if (loopDragTime < 0 || !loopDragIsStart)
+            if ((loopDragTime < 0 || !loopDragIsStart) && (ls >= 0 && ls < ms->segmentStart.size()))
             {
-                drawLoopDragMarker(g, mcolor, hotzone::LOOP_START,
-                                   ms->segmentStart[ms->loop_start]);
+                drawLoopDragMarker(g, mcolor, hotzone::LOOP_START, ms->segmentStart[ls]);
             }
 
-            if (loopDragTime < 0 || loopDragIsStart)
+            if ((loopDragTime < 0 || loopDragIsStart) && (le >= 0 && le < ms->segmentStart.size()))
             {
-                drawLoopDragMarker(g, mcolor, hotzone::LOOP_END, ms->segmentEnd[ms->loop_end]);
+                drawLoopDragMarker(g, mcolor, hotzone::LOOP_END, ms->segmentEnd[le]);
             }
 
             // loop marker when dragged
@@ -838,26 +875,26 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             auto c = hp.second;
             float px = tpx(t);
             int yofs = 13;
-            char txt[16];
+            std::string txt;
 
             if (!(c & TickDrawStyle::kNoLabel))
             {
 
-                auto sw = 0.f;
+                int sw = 0;
 
                 if (fmod(t, 1.f) == 0.f)
                 {
                     g.setColour(skin->getColor(Colors::MSEGEditor::Axis::Text));
                     g.setFont(primaryFont);
-                    snprintf(txt, 16, "%d", int(t));
-                    sw = primaryFont.getStringWidthFloat(txt);
+                    txt = fmt::format("{:d}", int(t));
+                    sw = SST_STRING_WIDTH_INT(primaryFont, txt);
                 }
                 else
                 {
                     g.setColour(skin->getColor(Colors::MSEGEditor::Axis::SecondaryText));
                     g.setFont(secondaryFont);
-                    snprintf(txt, 16, "%5.2f", t);
-                    sw = secondaryFont.getStringWidthFloat(txt);
+                    txt = fmt::format("{:5.2f}", t);
+                    sw = SST_STRING_WIDTH_INT(secondaryFont, txt);
                 }
 
                 g.drawText(txt, px - (sw / 2), haxisArea.getY() + 2, sw, yofs,
@@ -906,7 +943,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
             if (off == 0)
             {
-                char txt[16];
+                std::string txt;
                 auto value = std::get<1>(vp);
                 int ypos = 3;
 
@@ -915,7 +952,9 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     value = -value;
                 }
 
-                snprintf(txt, 16, "%5.1f", value);
+                txt = fmt::format("{:5.1f}", value);
+
+                g.setColour(skin->getColor(Colors::MSEGEditor::Axis::SecondaryText));
 
                 if (value == 1.f)
                 {
@@ -1082,9 +1121,6 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
     virtual void paint(juce::Graphics &g) override
     {
-        // TimeThisBlock ttblock("msegcanvas" );
-
-        // ttblock.bump( "a0" );
         auto uni = lfodata->unipolar.val.b;
         auto vs = getLocalBounds();
 
@@ -1094,24 +1130,14 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
         if (hotzones.empty())
             recalcHotZones(juce::Point<int>(vs.getX(), vs.getY()));
 
-        // ttblock.bump( "a1" );
         g.fillAll(skin->getColor(Colors::MSEGEditor::Background));
-        // ttblock.bump( "a1-1");
         auto drawArea = getDrawArea();
-        // ttblock.bump( "a1-2");
         float maxt = drawDuration();
-        // ttblock.bump( "a1-3");
         auto valpx = valToPx();
-        // ttblock.bump( "a1-4");
         auto tpx = timeToPx();
-        // ttblock.bump( "a1-5");
         auto pxt = pxToTime();
-        // ttblock.bump( "a1-6");
 
-        // ttblock.bump( "a2" );
-        /*
-         * Now draw the loop region
-         */
+        // Now draw the loop region
         if (ms->loopMode != MSEGStorage::LoopMode::ONESHOT && ms->editMode != MSEGStorage::LFO)
         {
             int ls = (ms->loop_start >= 0 ? ms->loop_start : 0);
@@ -1148,7 +1174,6 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             }
         }
 
-        // ttblock.bump("a");
         Surge::MSEG::EvaluatorState es, esdf;
         // This is different from the number in LFOMS::assign in draw mode on purpose
         es.seed(8675309);
@@ -1176,8 +1201,8 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
         float pathFirstY, pathLastX, pathLastY, pathLastDef;
 
-        bool drawnLast =
-            false; // this slightly odd construct means we always draw beyond the last point
+        // this slightly odd construct means we always draw beyond the last point
+        bool drawnLast = false;
         int priorEval = 0;
 
         for (int q = 0; q <= drawArea.getWidth(); ++q)
@@ -1187,7 +1212,6 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             if (!drawnLast)
             {
                 float iup = (int)up;
-
                 float fup = up - iup;
                 float v = Surge::MSEG::valueAt(iup, fup, 0, ms, &es, true);
                 float vdef = Surge::MSEG::valueAt(iup, fup, lfodata->deform.val.f, ms, &esdf, true);
@@ -1201,6 +1225,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     vdef = v;
 
                 int compareWith = es.lastEval;
+
                 if (up >= ms->totalDuration)
                     compareWith = ms->n_activeSegments - 1;
 
@@ -1220,15 +1245,18 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     {
                         addP(highlightPath, i, valpx(ms->segments[priorEval].nv1));
                     }
+
                     priorEval = es.lastEval;
                 }
 
                 if (es.lastEval == hoveredSegment)
                 {
                     bool skipThisAdd = false;
+
                     // edge case when you go exactly up to 1 evenly. See #3940
                     if (up < ms->segmentStart[es.lastEval] || up > ms->segmentEnd[es.lastEval])
                         skipThisAdd = true;
+
                     if (!hlpathUsed)
                     {
                         // We always want to hit the start
@@ -1240,8 +1268,10 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                             beginP(highlightPath, i, v);
                             beginP(highlightPath, i, v);
                         }
+
                         hlpathUsed = true;
                     }
+
                     if (!skipThisAdd)
                     {
                         addP(highlightPath, i, v);
@@ -1261,16 +1291,17 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     addP(defpath, i, vdef);
                     addP(fillpath, i, v);
                 }
+
                 pathLastX = i;
                 pathLastY = v;
                 pathLastDef = vdef;
             }
+
             drawnLast = up > ms->totalDuration;
         }
 
-        // ttblock.bump("b");
-
         int uniLimit = uni ? -1 : 0;
+
         addP(fillpath, pathLastX, valpx(uniLimit));
         addP(fillpath, uniLimit, valpx(uniLimit));
         addP(fillpath, uniLimit, pathFirstY);
@@ -1301,18 +1332,12 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             g.fillPath(fillpath, tfpath);
         }
 
-        // ttblock.bump("c");
-
         // draw vertical grid
         auto primaryGridColor = skin->getColor(Colors::MSEGEditor::Grid::Primary);
         auto secondaryHGridColor = skin->getColor(Colors::MSEGEditor::Grid::SecondaryHorizontal);
         auto secondaryVGridColor = skin->getColor(Colors::MSEGEditor::Grid::SecondaryVertical);
 
-        // ttblock.bump("c1");
-
         updateHTicks();
-
-        // ttblock.bump("c2");
 
         for (auto hp : hTicks)
         {
@@ -1336,17 +1361,10 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             if (pxa < drawArea.getX() || pxa > drawArea.getRight())
                 continue;
 
-            if (t > 0.1)
-            {
-                g.drawLine(pxa, drawArea.getY(), pxa, drawArea.getBottom() + ticklen, linewidth);
-            }
+            g.drawLine(pxa, drawArea.getY(), pxa, drawArea.getBottom() + ticklen, linewidth);
         }
 
-        // ttblock.bump("c3");
-
         updateVTicks();
-
-        // ttblock.bump("c4");
 
         for (auto vp : vTicks)
         {
@@ -1360,49 +1378,59 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                 g.setColour(primaryGridColor);
 
                 if (val != 0.f)
+                {
                     ticklen = 20;
+                }
 
-                //  if (val != -1.f)
                 g.drawLine(drawArea.getX() - ticklen, v, drawArea.getRight(), v);
             }
             else
             {
-                g.setColour(secondaryHGridColor);
                 bool useDottedPath = false; // use juce::Path and dotted. Slow AF on windows
                 bool useSolidPath = false;  // use juce::Path and solid. Fastest, but no dots
                 bool useHand = !(useDottedPath || useSolidPath); // Hand roll the lines. Fast enough
+
+                g.setColour(secondaryHGridColor);
 
                 if (useHand)
                 {
                     float x = drawArea.getX() - ticklen;
                     float xe = drawArea.getRight();
 
-                    while (x < xe)
+                    if (val != -1.f)
                     {
-                        g.drawLine(x, v, std::min(xe, x + 2), v, 0.5);
-                        x += 5;
+                        while (x < xe)
+                        {
+                            g.drawLine(x, v, std::min(xe, x + 2), v, 0.5);
+                            x += 5;
+                        }
                     }
                 }
                 else
                 {
                     float dashLength[2] = {2.f, 5.f}; // 2 px dash 5 px gap
-                    // Can be any even size if you change the '2' below in createDashedStroke
                     auto dotted = juce::Path();
                     auto markerLine = juce::Path();
-                    markerLine.startNewSubPath(drawArea.getX() - ticklen, v);
-                    markerLine.lineTo(drawArea.getRight(), v);
                     auto st = juce::PathStrokeType(0.5, juce::PathStrokeType::beveled,
                                                    juce::PathStrokeType::butt);
+
+                    markerLine.startNewSubPath(drawArea.getX() - ticklen, v);
+                    markerLine.lineTo(drawArea.getRight(), v);
+
+                    // Can be any even size if you change the '2' below
                     st.createDashedStroke(dotted, markerLine, dashLength, 2);
+
                     if (useDottedPath)
+                    {
                         g.strokePath(dotted, st);
+                    }
                     else
+                    {
                         g.strokePath(markerLine, st);
+                    }
                 }
             }
         }
-
-        // ttblock.bump("d");
 
         // draw hover loop markers
         for (const auto &h : hotzones)
@@ -1420,31 +1448,33 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     // my left edge is off the right or my left edge is off the left
                     if (h.rect.getX() > drawArea.getRight() + 1 ||
                         h.rect.getX() < drawArea.getX() - 1)
+                    {
                         continue;
+                    }
                 }
                 else if (h.zoneSubType == hotzone::LOOP_END)
                 {
                     // my right edge is off the right or left
                     if (h.rect.getRight() > drawArea.getRight() + 1 ||
                         h.rect.getRight() <= drawArea.getX())
+                    {
                         continue;
+                    }
                 }
 
                 // draw a hovered loop marker
                 if (h.active)
                 {
                     auto c = skin->getColor(Colors::MSEGEditor::Loop::Marker);
-
                     auto hr = h.rect.translated(0, -1);
 
                     g.setColour(c);
                     g.fillRect(hr);
+
                     drawLoopDragMarker(g, c, h.zoneSubType, hr);
                 }
             }
         }
-
-        // ttblock.bump("e");
 
         drawAxis(g);
 
@@ -1473,12 +1503,20 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             {
                 int sz = 13;
                 int offx = 0, offy = 0;
+                bool showValue = false;
+                const bool isMouseDown = (mouseDownInitiation == MOUSE_DOWN_IN_DRAW_AREA);
 
                 if (h.active)
-                    offy = 1;
+                {
+                    offy = isMouseDown ? 1 : 0;
+                    showValue = isMouseDown;
+                }
 
                 if (h.dragging)
+                {
                     offy = 2;
+                    showValue = isMouseDown;
+                }
 
                 if (h.zoneSubType == hotzone::SEGMENT_CONTROL)
                     offx = 1;
@@ -1486,26 +1524,87 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                 if (lassoSelector && lassoSelector->contains(h.associatedSegment))
                     offy = 2;
 
+                auto r = h.rect;
+
+                if (h.useDrawRect)
+                {
+                    r = h.drawRect;
+                }
+
+                int cx = r.getCentreX();
+
                 if (handleDrawable)
                 {
-                    auto r = h.rect;
-
-                    if (h.useDrawRect)
-                        r = h.drawRect;
-
-                    int cx = r.getCentreX();
-
                     if (cx >= drawArea.getX() && cx <= drawArea.getRight())
                     {
                         juce::Graphics::ScopedSaveState gs(g);
                         auto movet = juce::AffineTransform().translated(r.getTopLeft());
+
                         g.addTransform(movet);
-                        // g.reduceClipRegion(r.toNearestInt());
                         g.reduceClipRegion(juce::Rectangle<int>(0, 0, sz, sz));
+
                         auto at = juce::AffineTransform().translated(-offx * sz, -offy * sz);
 
                         handleDrawable->draw(g, 1.0, at);
                     }
+                }
+
+                if (showValue)
+                {
+                    auto fillr = [&g](juce::Rectangle<float> r, juce::Colour c) {
+                        g.setColour(c);
+                        g.fillRect(r);
+                    };
+
+                    const int detailedMode = Surge::Storage::getValueDisplayPrecision(storage);
+
+                    g.setFont(skin->fontManager->lfoTypeFont);
+
+                    float val = h.specialEndpoint ? ms->segments[h.associatedSegment].nv1
+                                                  : ms->segments[h.associatedSegment].v0;
+
+                    std::string txt = fmt::format("X: {:.{}f}", pxt(cx), detailedMode),
+                                txt2 = fmt::format("Y: {:.{}f}", val, detailedMode);
+
+                    int sw1 = SST_STRING_WIDTH_INT(g.getCurrentFont(), txt),
+                        sw2 = SST_STRING_WIDTH_INT(g.getCurrentFont(), txt2);
+
+                    float dragX = r.getRight(), dragY = r.getBottom();
+                    float dragW = 6 + std::max(sw1, sw2), dragH = 22;
+
+                    // reposition the display if we've reached right or bottom edge of drawArea
+                    if (dragX + dragW > drawArea.getRight())
+                    {
+                        dragX -= int(dragX + dragW) % drawArea.getRight();
+                    }
+
+                    if (dragY + dragH > drawArea.getBottom())
+                    {
+                        dragY -= int(dragY + dragH) % drawArea.getBottom();
+                    }
+
+                    auto readout = juce::Rectangle<float>(dragX, dragY, dragW, dragH);
+
+                    // if the readout intersects with a node rect, shift it up
+                    // (this only happens in bottom right corner)
+                    if (readout.intersectRectangles(dragX, dragY, dragW, dragH, r.getX(), r.getY(),
+                                                    r.getWidth(), r.getHeight()))
+                    {
+                        readout.translate(-(r.getHeight() / 2), -(r.getHeight() / 2));
+                    }
+
+                    fillr(readout, skin->getColor(Colors::LFO::StepSeq::InfoWindow::Border));
+                    readout = readout.reduced(1, 1);
+                    fillr(readout, skin->getColor(Colors::LFO::StepSeq::InfoWindow::Background));
+
+                    readout = readout.withTrimmedLeft(2).withHeight(10);
+
+                    g.setColour(skin->getColor(Colors::LFO::StepSeq::InfoWindow::Text));
+                    g.drawText(txt, readout, juce::Justification::centredLeft);
+
+                    readout = readout.translated(0, 10);
+
+                    g.drawText(txt2, readout, juce::Justification::centredLeft);
                 }
             }
         }
@@ -1526,6 +1625,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
     void mouseDown(const juce::MouseEvent &e) override
     {
+        prepareForUndo();
         mouseDownInitiation =
             (getDrawArea().contains(e.position.toInt()) ? MOUSE_DOWN_IN_DRAW_AREA
                                                         : MOUSE_DOWN_OUTSIDE_DRAW_AREA);
@@ -1713,11 +1813,23 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
         if (da.contains(where))
         {
             auto tf = pxToTime();
-            auto t = tf(where.x);
             auto pv = pxToVal();
+            auto tp = timeToPx();
+            auto vp = valToPx();
+
+            auto t = tf(where.x);
             auto v = pv(where.y);
 
-            // Check if I'm on a hotzoneo
+            auto testIfLastNode = [tp, vp](juce::Point<int> where, MSEGStorage *ms) {
+                auto idx = ms->n_activeSegments;
+                auto area = juce::Rectangle<int>(where.x, where.y, 4, 4);
+                auto last_node =
+                    juce::Point<int>(tp(ms->segmentEnd[idx]), vp(ms->segments[idx].nv1));
+
+                return area.contains(last_node);
+            };
+
+            // Check if I'm on a hotzone
             for (auto &h : hotzones)
             {
                 if (h.rect.contains(where.toFloat()) && h.type == hotzone::MOUSABLE_NODE)
@@ -1726,23 +1838,31 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     {
                     case hotzone::SEGMENT_ENDPOINT:
                     {
-                        if (event.mods.isShiftDown() && h.associatedSegment >= 0)
+                        if (ms->editMode == MSEGStorage::LFO && testIfLastNode(where, ms))
                         {
-                            Surge::MSEG::deleteSegment(ms, ms->segmentStart[h.associatedSegment]);
+                            return;
                         }
                         else
                         {
-                            Surge::MSEG::unsplitSegment(ms, t);
+                            if (event.mods.isShiftDown() && h.associatedSegment >= 0)
+                            {
+                                Surge::MSEG::deleteSegment(ms,
+                                                           ms->segmentStart[h.associatedSegment]);
+                            }
+                            else
+                            {
+                                Surge::MSEG::unsplitSegment(ms, t);
+                            }
+
+                            modelChanged();
+                            repaint();
+
+                            return;
                         }
-
-                        modelChanged();
-                        repaint();
-
-                        return;
                     }
                     case hotzone::SEGMENT_CONTROL:
                     {
-                        // Reset the control point to duration half value middle
+                        // Reset the control point to half segment duration, middle value
                         Surge::MSEG::resetControlPoint(ms, t);
 
                         modelChanged();
@@ -1790,6 +1910,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
     void mouseUp(const juce::MouseEvent &e) override
     {
+        pushToUndoIfDirty();
         auto where = e.position.toInt();
 
         mouseDownInitiation = NOT_MOUSE_DOWN;
@@ -2312,12 +2433,106 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
     // see if it can be done in a cleaner way
     // TODO: once we have more than 6 voice/scene LFOs, this condition will need tweaking,
     // because new LFOs will need to be appended at the end of the list of modsources
+    // OR, we break compatibility in a major version update and have all LFOs in a block
     bool isSceneMSEG() const { return lfodata->shape.ctrlgroup_entry >= ms_slfo1; }
+
+    void showSegmentTypein(int i, SegmentProps prop, const juce::Point<int> at)
+    {
+        using type = MSEGStorage::segment::Type;
+
+        const bool is2Dcp =
+            ms->segments[i].type == type::QUAD_BEZIER || ms->segments[i].type == type::BROWNIAN;
+
+        float *propValue = nullptr;
+        std::string propName;
+
+        switch (prop)
+        {
+        case SegmentProps::duration:
+            propValue = &ms->segments[i].duration;
+            propName = "Duration";
+            break;
+        case SegmentProps::value:
+            propValue = &ms->segments[i].v0;
+            propName = "Value";
+            break;
+        case SegmentProps::cp_duration:
+            propValue = &ms->segments[i].cpduration;
+            propName = "Control Point X";
+            break;
+        case SegmentProps::cp_value:
+            propValue = &ms->segments[i].cpv;
+            propName = fmt::format("Control Point{}", is2Dcp ? " Y" : "");
+            break;
+
+        default:
+            return;
+        }
+
+        const int detailedMode = Surge::Storage::getValueDisplayPrecision(storage);
+
+        auto handleTypein = [this, i, prop, propValue, propName](const std::string &s) {
+            auto divPos = s.find('/');
+            float v = 0.f;
+
+            if (divPos != std::string::npos)
+            {
+                auto n = s.substr(0, divPos);
+                auto d = s.substr(divPos + 1);
+                auto nv = std::atof(n.c_str());
+                auto dv = std::atof(d.c_str());
+
+                if (dv == 0)
+                {
+                    return false;
+                }
+
+                v = (nv / dv);
+            }
+            else
+            {
+                v = std::atof(s.c_str());
+            }
+
+            const float lowClamp =
+                (prop == SegmentProps::duration || prop == SegmentProps::cp_duration) ? 0.f : -1.f;
+            const float highClamp = (prop == SegmentProps::duration) ? 1000.f : 1.f;
+
+            *propValue = std::clamp(v, lowClamp, highClamp);
+
+            pushToUndo();
+            modelChanged();
+            repaint();
+
+            return true;
+        };
+
+        if (!typeinEditor)
+        {
+            typeinEditor = std::make_unique<Surge::Overlays::TypeinLambdaEditor>(handleTypein);
+            getParentComponent()->addChildComponent(*typeinEditor);
+        }
+
+        typeinEditor->callback = handleTypein;
+        typeinEditor->setMainLabel(
+            fmt::format("Edit Segment {} {}", std::to_string(i + 1), propName));
+        typeinEditor->setValueLabels(fmt::format("current: {:.{}f}", *propValue, detailedMode), "");
+        typeinEditor->setSkin(skin, associatedBitmapStore);
+        typeinEditor->setEditableText(fmt::format("{:.{}f}", *propValue, detailedMode));
+        typeinEditor->setReturnFocusTarget(this);
+
+        auto r = typeinEditor->getRequiredSize();
+        typeinEditor->setBounds(r.withCentre(at));
+
+        typeinEditor->setVisible(true);
+        typeinEditor->grabFocus();
+    }
 
     void openPopup(const juce::Point<float> &iw)
     {
-        auto contextMenu = juce::PopupMenu();
+        using type = MSEGStorage::segment::Type;
 
+        auto contextMenu = juce::PopupMenu();
         auto tf = pxToTime();
         auto t = tf(iw.x);
         auto tts = Surge::MSEG::timeToSegment(ms, t);
@@ -2334,7 +2549,43 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
         auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("MSEG Segment", hurl);
         tcomp->setSkin(skin, associatedBitmapStore);
-        contextMenu.addCustomItem(-1, std::move(tcomp));
+        auto hment = tcomp->getTitle();
+
+        contextMenu.addCustomItem(-1, std::move(tcomp), nullptr, hment);
+
+        contextMenu.addSeparator();
+
+        const int detailedMode = Surge::Storage::getValueDisplayPrecision(storage);
+
+        contextMenu.addItem(
+            fmt::format("Duration: {:.{}f}", ms->segments[tts].duration, detailedMode), true, false,
+            [this, iw, tts]() { showSegmentTypein(tts, SegmentProps::duration, iw.toInt()); });
+        contextMenu.addItem(
+            fmt::format("Value: {:.{}f}", ms->segments[tts].v0, detailedMode), true, false,
+            [this, iw, tts]() { showSegmentTypein(tts, SegmentProps::value, iw.toInt()); });
+
+        const bool is2Dcp =
+            ms->segments[tts].type == type::QUAD_BEZIER || ms->segments[tts].type == type::BROWNIAN;
+
+        if (ms->segments[tts].type != type::HOLD)
+        {
+            if (is2Dcp)
+            {
+                auto curveStr = fmt::format("Control Point X: {:.{}f}",
+                                            ms->segments[tts].cpduration, detailedMode);
+
+                contextMenu.addItem(curveStr, true, false, [this, iw, tts]() {
+                    showSegmentTypein(tts, SegmentProps::cp_duration, iw.toInt());
+                });
+            }
+
+            auto curveStr = fmt::format("Control Point{}: {:.{}f}", is2Dcp ? " Y" : "",
+                                        ms->segments[tts].cpv, detailedMode);
+
+            contextMenu.addItem(curveStr, true, false, [this, iw, tts]() {
+                showSegmentTypein(tts, SegmentProps::cp_value, iw.toInt());
+            });
+        }
 
         contextMenu.addSeparator();
 
@@ -2342,15 +2593,16 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
         {
             if (tts <= ms->loop_end + 1 && tts != ms->loop_start)
             {
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Set Loop Start"), [this, tts]() {
+                contextMenu.addItem(Surge::GUI::toOSCase("Set Loop Start"), [this, tts]() {
                     Surge::MSEG::setLoopStart(ms, tts);
+                    pushToUndo();
                     modelChanged();
                 });
             }
 
             if (tts >= ms->loop_start - 1 && tts != ms->loop_end)
             {
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Set Loop End"), [this, tts, t]() {
+                contextMenu.addItem(Surge::GUI::toOSCase("Set Loop End"), [this, tts, t]() {
                     auto along = t - ms->segmentStart[tts];
 
                     if (ms->segments[tts].duration == 0)
@@ -2370,6 +2622,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                     }
 
                     Surge::MSEG::setLoopEnd(ms, target);
+                    pushToUndo();
                     modelChanged();
                 });
             }
@@ -2384,59 +2637,70 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             auto pv = pxToVal();
             auto v = pv(iw.y);
 
+            bool isActive = (ms->editMode == MSEGStorage::ENVELOPE);
+
             actionsMenu.addItem("Split", [this, t, v]() {
                 Surge::MSEG::splitSegment(this->ms, t, v);
+                pushToUndo();
                 modelChanged();
             });
 
             actionsMenu.addItem("Delete", (ms->n_activeSegments > 1), false, [this, t]() {
                 Surge::MSEG::deleteSegment(this->ms, t);
+                pushToUndo();
                 modelChanged();
             });
 
             actionsMenu.addSeparator();
 
-            actionsMenu.addItem(Surge::GUI::toOSCaseForMenu("Double Duration"), [this]() {
+            actionsMenu.addItem(Surge::GUI::toOSCase("Double Duration"), isActive, false, [this]() {
                 Surge::MSEG::scaleDurations(this->ms, 2.0, longestMSEG);
+                pushToUndo();
                 modelChanged();
                 zoomToFull();
             });
 
-            actionsMenu.addItem(Surge::GUI::toOSCaseForMenu("Half Duration"), [this]() {
+            actionsMenu.addItem(Surge::GUI::toOSCase("Half Duration"), isActive, false, [this]() {
                 Surge::MSEG::scaleDurations(this->ms, 0.5, longestMSEG);
+                pushToUndo();
                 modelChanged();
                 zoomToFull();
             });
 
             actionsMenu.addSeparator();
 
-            actionsMenu.addItem(Surge::GUI::toOSCaseForMenu("Flip Vertically"), [this]() {
+            actionsMenu.addItem(Surge::GUI::toOSCase("Flip Vertically"), [this]() {
                 Surge::MSEG::scaleValues(this->ms, -1);
+                pushToUndo();
                 modelChanged();
             });
 
-            actionsMenu.addItem(Surge::GUI::toOSCaseForMenu("Flip Horizontally"), [this]() {
+            actionsMenu.addItem(Surge::GUI::toOSCase("Flip Horizontally"), [this]() {
                 Surge::MSEG::mirrorMSEG(this->ms);
+                pushToUndo();
                 modelChanged();
             });
 
             actionsMenu.addSeparator();
 
-            actionsMenu.addItem(Surge::GUI::toOSCaseForMenu("Quantize Nodes to Snap Divisions"),
-                                (ms->editMode != MSEGStorage::LFO), false, [this]() {
+            actionsMenu.addItem(Surge::GUI::toOSCase("Quantize Nodes to Snap Divisions"), isActive,
+                                false, [this]() {
                                     Surge::MSEG::setAllDurationsTo(this->ms, ms->hSnapDefault);
+                                    pushToUndo();
                                     modelChanged();
                                 });
 
-            actionsMenu.addItem(Surge::GUI::toOSCaseForMenu("Quantize Nodes to Whole Units"),
-                                (ms->editMode != MSEGStorage::LFO), false, [this]() {
+            actionsMenu.addItem(Surge::GUI::toOSCase("Quantize Nodes to Whole Units"), isActive,
+                                false, [this]() {
                                     Surge::MSEG::setAllDurationsTo(this->ms, 1.0);
+                                    pushToUndo();
                                     modelChanged();
                                 });
 
-            actionsMenu.addItem(Surge::GUI::toOSCaseForMenu("Distribute Nodes Evenly"), [this]() {
+            actionsMenu.addItem(Surge::GUI::toOSCase("Distribute Nodes Evenly"), [this]() {
                 Surge::MSEG::setAllDurationsTo(this->ms,
                                                ms->totalDuration / this->ms->n_activeSegments);
+                pushToUndo();
                 modelChanged();
             });
 
@@ -2444,29 +2708,32 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
             auto createMenu = juce::PopupMenu();
 
-            createMenu.addItem(Surge::GUI::toOSCaseForMenu("Minimal MSEG"), [this]() {
+            createMenu.addItem(Surge::GUI::toOSCase("Minimal MSEG"), [this]() {
                 Surge::MSEG::clearMSEG(this->ms);
                 this->zoomToFull();
                 if (controlregion)
                     controlregion->rebuild();
+                pushToUndo();
                 modelChanged();
             });
 
             createMenu.addSeparator();
 
-            createMenu.addItem(Surge::GUI::toOSCaseForMenu("Default Voice MSEG"), [this]() {
+            createMenu.addItem(Surge::GUI::toOSCase("Default Voice MSEG"), [this]() {
                 Surge::MSEG::createInitVoiceMSEG(this->ms);
                 this->zoomToFull();
                 if (controlregion)
                     controlregion->rebuild();
+                pushToUndo();
                 modelChanged();
             });
 
-            createMenu.addItem(Surge::GUI::toOSCaseForMenu("Default Scene MSEG"), [this]() {
+            createMenu.addItem(Surge::GUI::toOSCase("Default Scene MSEG"), [this]() {
                 Surge::MSEG::createInitSceneMSEG(this->ms);
                 this->zoomToFull();
                 if (controlregion)
                     controlregion->rebuild();
+                pushToUndo();
                 modelChanged();
             });
 
@@ -2476,27 +2743,28 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
             for (int i : stepCounts)
             {
-                createMenu.addItem(
-                    Surge::GUI::toOSCaseForMenu(std::to_string(i) + " Step Sequencer"),
-                    [this, i]() {
-                        Surge::MSEG::createStepseqMSEG(this->ms, i);
-                        this->zoomToFull();
-                        if (controlregion)
-                            controlregion->rebuild();
-                        modelChanged();
-                    });
+                createMenu.addItem(Surge::GUI::toOSCase(std::to_string(i) + " Step Sequencer"),
+                                   [this, i]() {
+                                       Surge::MSEG::createStepseqMSEG(this->ms, i);
+                                       this->zoomToFull();
+                                       if (controlregion)
+                                           controlregion->rebuild();
+                                       pushToUndo();
+                                       modelChanged();
+                                   });
             }
 
             createMenu.addSeparator();
 
             for (int i : stepCounts)
             {
-                createMenu.addItem(Surge::GUI::toOSCaseForMenu(std::to_string(i) + " Lines Sine"),
+                createMenu.addItem(Surge::GUI::toOSCase(std::to_string(i) + " Lines Sine"),
                                    [this, i] {
                                        Surge::MSEG::createSinLineMSEG(this->ms, i);
                                        this->zoomToFull();
                                        if (controlregion)
                                            controlregion->rebuild();
+                                       pushToUndo();
                                        modelChanged();
                                    });
             }
@@ -2508,15 +2776,15 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                 // we're fine with a max of 32 sawtooth plucks methinks - ED
                 if (i <= 32)
                 {
-                    createMenu.addItem(
-                        Surge::GUI::toOSCaseForMenu(std::to_string(i) + " Sawtooth Plucks"),
-                        [this, i]() {
-                            Surge::MSEG::createSawMSEG(this->ms, i, 0.5);
-                            this->zoomToFull();
-                            if (controlregion)
-                                controlregion->rebuild();
-                            modelChanged();
-                        });
+                    createMenu.addItem(Surge::GUI::toOSCase(std::to_string(i) + " Sawtooth Plucks"),
+                                       [this, i]() {
+                                           Surge::MSEG::createSawMSEG(this->ms, i, 0.5);
+                                           this->zoomToFull();
+                                           if (controlregion)
+                                               controlregion->rebuild();
+                                           pushToUndo();
+                                           modelChanged();
+                                       });
                 }
             }
 
@@ -2526,31 +2794,35 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             {
                 auto triggerMenu = juce::PopupMenu();
 
-                triggerMenu.addItem(Surge::GUI::toOSCaseForMenu("Filter EG"), true,
+                triggerMenu.addItem(Surge::GUI::toOSCase("Filter EG"), true,
                                     (ms->segments[tts].retriggerFEG), [this, tts]() {
                                         this->ms->segments[tts].retriggerFEG =
                                             !this->ms->segments[tts].retriggerFEG;
+                                        pushToUndo();
                                         modelChanged();
                                     });
 
-                triggerMenu.addItem(Surge::GUI::toOSCaseForMenu("Amp EG"), true,
+                triggerMenu.addItem(Surge::GUI::toOSCase("Amp EG"), true,
                                     (ms->segments[tts].retriggerAEG), [this, tts]() {
                                         this->ms->segments[tts].retriggerAEG =
                                             !this->ms->segments[tts].retriggerAEG;
+                                        pushToUndo();
                                         modelChanged();
                                     });
 
                 triggerMenu.addSeparator();
 
-                triggerMenu.addItem(Surge::GUI::toOSCaseForMenu("Nothing"), [this, tts]() {
+                triggerMenu.addItem(Surge::GUI::toOSCase("Nothing"), [this, tts]() {
                     this->ms->segments[tts].retriggerFEG = false;
                     this->ms->segments[tts].retriggerAEG = false;
+                    pushToUndo();
                     modelChanged();
                 });
 
-                triggerMenu.addItem(Surge::GUI::toOSCaseForMenu("All"), [this, tts]() {
+                triggerMenu.addItem(Surge::GUI::toOSCase("All"), [this, tts]() {
                     this->ms->segments[tts].retriggerFEG = true;
                     this->ms->segments[tts].retriggerAEG = true;
+                    pushToUndo();
                     modelChanged();
                 });
 
@@ -2560,8 +2832,9 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             auto settingsMenu = juce::PopupMenu();
 
             settingsMenu.addItem(
-                Surge::GUI::toOSCaseForMenu("Link Start and End Nodes"), true,
+                Surge::GUI::toOSCase("Link Start and End Nodes"), true,
                 (ms->endpointMode == MSEGStorage::EndpointMode::LOCKED), [this]() {
+                    pushToUndo();
                     if (this->ms->endpointMode == MSEGStorage::EndpointMode::LOCKED)
                     {
                         this->ms->endpointMode = MSEGStorage::EndpointMode::FREE;
@@ -2576,17 +2849,19 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
 
             settingsMenu.addSeparator();
 
-            settingsMenu.addItem(Surge::GUI::toOSCaseForMenu("Deform Applied to Segment"), true,
+            settingsMenu.addItem(Surge::GUI::toOSCase("Deform Applied to Segment"), true,
                                  ms->segments[tts].useDeform, [this, tts]() {
                                      this->ms->segments[tts].useDeform =
                                          !this->ms->segments[tts].useDeform;
+                                     pushToUndo();
                                      modelChanged();
                                  });
 
-            settingsMenu.addItem(Surge::GUI::toOSCaseForMenu("Invert Deform Value"), true,
+            settingsMenu.addItem(Surge::GUI::toOSCase("Invert Deform Value"), true,
                                  ms->segments[tts].invertDeform, [this, tts]() {
                                      this->ms->segments[tts].invertDeform =
                                          !this->ms->segments[tts].invertDeform;
+                                     pushToUndo();
                                      modelChanged();
                                  });
 
@@ -2598,7 +2873,7 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                                                        MSEGStorage::segment::Type type) {
                 contextMenu.addItem(
                     n, true, (tts >= 0 && this->ms->segments[tts].type == type), [this, t, type]() {
-                        // ADJUST HERE HERE
+                        // ADJUST HERE
                         Surge::MSEG::changeTypeAt(this->ms, t, type);
 
                         for (auto &h : hotzones)
@@ -2610,32 +2885,32 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
                                 this->ms->segments[h.associatedSegment].type = type;
                             }
                         }
+
+                        pushToUndo();
                         modelChanged();
                     });
             };
 
-            typeTo("Hold", MSEGStorage::segment::Type::HOLD);
-            typeTo("Linear", MSEGStorage::segment::Type::LINEAR);
-            typeTo(Surge::GUI::toOSCaseForMenu("S-Curve"), MSEGStorage::segment::Type::SCURVE);
-            typeTo("Bezier", MSEGStorage::segment::Type::QUAD_BEZIER);
+            typeTo("Hold", type::HOLD);
+            typeTo("Linear", type::LINEAR);
+            typeTo(Surge::GUI::toOSCase("S-Curve"), type::SCURVE);
+            typeTo("Bezier", type::QUAD_BEZIER);
 
             contextMenu.addSeparator();
 
-            typeTo("Sine", MSEGStorage::segment::Type::SINE);
-            typeTo("Triangle", MSEGStorage::segment::Type::TRIANGLE);
-            typeTo("Sawtooth", MSEGStorage::segment::Type::SAWTOOTH);
-            typeTo("Square", MSEGStorage::segment::Type::SQUARE);
+            typeTo("Sine", type::SINE);
+            typeTo("Triangle", type::TRIANGLE);
+            typeTo("Sawtooth", type::SAWTOOTH);
+            typeTo("Square", type::SQUARE);
 
             contextMenu.addSeparator();
 
-            typeTo("Bump", MSEGStorage::segment::Type::BUMP);
-            typeTo("Stairs", MSEGStorage::segment::Type::STAIRS);
-            typeTo(Surge::GUI::toOSCaseForMenu("Smooth Stairs"),
-                   MSEGStorage::segment::Type::SMOOTH_STAIRS);
-            typeTo(Surge::GUI::toOSCaseForMenu("Brownian Bridge"),
-                   MSEGStorage::segment::Type::BROWNIAN);
+            typeTo("Bump", type::BUMP);
+            typeTo("Stairs", type::STAIRS);
+            typeTo(Surge::GUI::toOSCase("Smooth Stairs"), type::SMOOTH_STAIRS);
+            typeTo(Surge::GUI::toOSCase("Brownian Bridge"), type::BROWNIAN);
 
-            contextMenu.showMenuAsync(juce::PopupMenu::Options());
+            contextMenu.showMenuAsync(sge->popupMenuOptions());
         }
     }
 
@@ -2652,8 +2927,13 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
             recalcHotZones(mouseDownOrigin); // FIXME
 
         if (shouldDirty)
+        {
             storage->getPatch().isDirty = true;
+            tagForUndo();
+        }
+        this->sge->forceLfoDisplayRepaint();
         onModelChanged();
+        repaint();
     }
 
     static constexpr int longestMSEG = 128;
@@ -2761,8 +3041,31 @@ struct MSEGCanvas : public juce::Component, public Surge::GUI::SkinConsumingComp
     SurgeStorage *storage = nullptr;
     float loopDragTime = -1, loopDragEnd = -1;
     bool loopDragIsStart = false;
+    SurgeGUIEditor *sge;
 
     SurgeImage *handleDrawable{nullptr};
+
+    bool shouldPostUndo{false};
+    MSEGStorage pushThisToUndoStorage;
+    void prepareForUndo()
+    {
+        pushThisToUndoStorage = *(this->ms);
+        shouldPostUndo = false;
+    }
+    void tagForUndo() { shouldPostUndo = true; }
+    void pushToUndo()
+    {
+        shouldPostUndo = false;
+        sge->undoManager()->pushMSEG(sge->getCurrentScene(), sge->getCurrentLFOIDInEditor(),
+                                     pushThisToUndoStorage);
+    }
+    void pushToUndoIfDirty()
+    {
+        if (shouldPostUndo)
+        {
+            pushToUndo();
+        }
+    }
 };
 
 void MSEGControlRegion::valueChanged(Surge::GUI::IComponentTagValue *p)
@@ -2774,32 +3077,30 @@ void MSEGControlRegion::valueChanged(Surge::GUI::IComponentTagValue *p)
     {
     case tag_edit_mode:
     {
+        canvas->prepareForUndo();
+        canvas->pushToUndo();
         int m = val > 0.5 ? 1 : 0;
         auto editMode = (MSEGStorage::EditMode)m;
         Surge::MSEG::modifyEditMode(this->ms, editMode);
 
         // zoom to fit
-        if (canvas)
-        {
-            canvas->ms->axisStart = 0.f;
-            canvas->ms->axisWidth = editMode ? 1.f : ms->envelopeModeDuration;
+        canvas->ms->axisStart = 0.f;
+        canvas->ms->axisWidth = editMode ? 1.f : ms->envelopeModeDuration;
 
-            canvas->modelChanged(0, false);
-            canvas->repaint();
-        }
+        canvas->modelChanged(0, false);
+        canvas->repaint();
 
         repaint();
         break;
     }
     case tag_loop_mode:
     {
+        canvas->prepareForUndo();
+        canvas->pushToUndo();
         int m = floor((val * 2) + 0.1) + 1;
         ms->loopMode = (MSEGStorage::LoopMode)m;
-        if (canvas)
-        {
-            canvas->modelChanged();
-            canvas->repaint();
-        }
+        canvas->modelChanged();
+        canvas->repaint();
         repaint();
         break;
     }
@@ -2886,7 +3187,7 @@ int32_t MSEGControlRegion::controlModifierClicked(Surge::GUI::IComponentTagValue
         options.push_back(std::make_pair("Off", 0));
         options.push_back(std::make_pair("Loop", 0.5));
         options.push_back(
-            std::make_pair(Surge::GUI::toOSCaseForMenu("Gate (Loop Until Release)").c_str(), 1.0));
+            std::make_pair(Surge::GUI::toOSCase("Gate (Loop Until Release)").c_str(), 1.0));
         break;
 
     case tag_edit_mode:
@@ -2952,8 +3253,9 @@ int32_t MSEGControlRegion::controlModifierClicked(Surge::GUI::IComponentTagValue
         auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(menuName, hurl);
 
         tcomp->setSkin(skin, associatedBitmapStore);
+        auto hment = tcomp->getTitle();
 
-        contextMenu.addCustomItem(-1, std::move(tcomp));
+        contextMenu.addCustomItem(-1, std::move(tcomp), nullptr, hment);
 
         contextMenu.addSeparator();
 
@@ -2982,7 +3284,9 @@ int32_t MSEGControlRegion::controlModifierClicked(Surge::GUI::IComponentTagValue
         {
             contextMenu.addSeparator();
 
-            auto handleTypein = [pControl, this](const std::string &s) {
+            auto c = pControl->asJuceComponent();
+
+            auto handleTypein = [c, pControl, this](const std::string &s) {
                 auto i = std::atoi(s.c_str());
 
                 if (i >= 1 && i <= 100)
@@ -2990,11 +3294,9 @@ int32_t MSEGControlRegion::controlModifierClicked(Surge::GUI::IComponentTagValue
                     pControl->setValue(Parameter::intScaledToFloat(i, 100, 1));
                     valueChanged(pControl);
 
-                    auto iv = pControl->asJuceComponent();
-
-                    if (iv)
+                    if (c)
                     {
-                        iv->repaint();
+                        c->repaint();
                     }
 
                     return true;
@@ -3005,7 +3307,7 @@ int32_t MSEGControlRegion::controlModifierClicked(Surge::GUI::IComponentTagValue
             auto val =
                 std::to_string(Parameter::intUnscaledFromFloat(pControl->getValue(), 100, 1));
 
-            auto showTypein = [this, handleTypein, menuName, pControl, val]() {
+            auto showTypein = [this, c, handleTypein, menuName, pControl, val]() {
                 if (!typeinEditor)
                 {
                     typeinEditor =
@@ -3018,9 +3320,10 @@ int32_t MSEGControlRegion::controlModifierClicked(Surge::GUI::IComponentTagValue
                 typeinEditor->setValueLabels("current: " + val, "");
                 typeinEditor->setSkin(skin, associatedBitmapStore);
                 typeinEditor->setEditableText(val);
+                typeinEditor->setReturnFocusTarget(c);
 
-                auto topOfControl = pControl->asJuceComponent()->getParentComponent()->getY();
-                auto pb = pControl->asJuceComponent()->getBounds();
+                auto topOfControl = c->getParentComponent()->getY();
+                auto pb = c->getBounds();
                 auto cx = pb.getCentreX();
 
                 auto r = typeinEditor->getRequiredSize();
@@ -3032,13 +3335,61 @@ int32_t MSEGControlRegion::controlModifierClicked(Surge::GUI::IComponentTagValue
                 typeinEditor->grabFocus();
             };
 
-            contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Edit Value: ") + val, true, false,
+            contextMenu.addItem(Surge::GUI::toOSCase("Edit Value: ") + val, true, false,
                                 showTypein);
         }
 
-        contextMenu.showMenuAsync(juce::PopupMenu::Options());
+        contextMenu.showMenuAsync(sge->popupMenuOptions(),
+                                  Surge::GUI::makeEndHoverCallback(pControl));
     }
     return 1;
+}
+
+void MSEGControlRegion::hvSnapTypein(bool isH)
+{
+    // So gross that this is copied from the menu handler partly above, but different enough that I
+    // can't quite make it one thing. Ahh well. Will all get redone one day anyway
+    if (!typeinEditor)
+    {
+        typeinEditor = std::make_unique<TypeinLambdaEditor>([](auto c) { return false; });
+        getParentComponent()->addChildComponent(*typeinEditor);
+    }
+    typeinEditor->setReturnFocusTarget(isH ? hSnapSize.get() : vSnapSize.get());
+    typeinEditor->setSkin(skin, associatedBitmapStore);
+
+    typeinEditor->setMainLabel(std::string() + "MSEG " + (isH ? "Horizontal" : "Vertical") +
+                               " Snap Grid");
+    typeinEditor->setValueLabels(
+        "current: " + std::to_string(isH ? hSnapSize->getIntValue() : vSnapSize->getIntValue()),
+        "");
+    typeinEditor->setEditableText(
+        std::to_string(isH ? hSnapSize->getIntValue() : vSnapSize->getIntValue()));
+
+    auto c = isH ? hSnapSize.get() : vSnapSize.get();
+    auto topOfControl = c->getParentComponent()->getY();
+    auto pb = c->getBounds();
+    auto cx = pb.getCentreX();
+
+    auto r = typeinEditor->getRequiredSize();
+    cx -= r.getWidth() / 2;
+    r = r.withBottomY(topOfControl).withX(cx);
+    typeinEditor->setBounds(r);
+
+    typeinEditor->setVisible(true);
+    typeinEditor->grabKeyboardFocus();
+
+    typeinEditor->callback = [w = juce::Component::SafePointer(this), isH](auto s) {
+        auto sn = std::clamp(std::atoi(s.c_str()), 1, 32);
+        if (w)
+        {
+            w->typeinEditor->setVisible(false);
+            if (isH)
+                w->hSnapSize->setIntValue(sn);
+            else
+                w->vSnapSize->setIntValue(sn);
+        }
+        return true;
+    };
 }
 
 void MSEGControlRegion::rebuild()
@@ -3046,8 +3397,8 @@ void MSEGControlRegion::rebuild()
     removeAllChildren();
     labels.clear();
 
-    auto labelFont = Surge::GUI::getFontManager()->getLatoAtSize(9, juce::Font::bold);
-    auto editFont = Surge::GUI::getFontManager()->getLatoAtSize(9);
+    auto labelFont = skin->fontManager->getLatoAtSize(9, juce::Font::bold);
+    auto editFont = skin->fontManager->getLatoAtSize(9);
 
     int height = getHeight();
     int margin = 2;
@@ -3097,7 +3448,7 @@ void MSEGControlRegion::rebuild()
         // canvas is nullptr in rebuild call in constructor, use state in this case
         if (canvas)
         {
-            movementMode->setValue(canvas->timeEditMode / 2.f);
+            movementMode->setValue(float(canvas->timeEditMode) / 2.f);
         }
         else
         {
@@ -3196,7 +3547,7 @@ void MSEGControlRegion::rebuild()
         int margin = 2;
         int segWidth = btnWidth + editWidth + 10;
         int ypos = 1;
-        char svt[256];
+        std::string svt;
 
         auto mml = std::make_unique<juce::Label>();
         mml->setText("Snap to Grid", juce::dontSendNotification);
@@ -3210,6 +3561,7 @@ void MSEGControlRegion::rebuild()
 
         hSnapButton = std::make_unique<Surge::Widgets::Switch>();
         hSnapButton->setSkin(skin, associatedBitmapStore);
+        hSnapButton->setStorage(storage);
         hSnapButton->addListener(this);
         hSnapButton->setBounds(xpos, ypos - 1, btnWidth, buttonHeight);
         hSnapButton->setTag(tag_horizontal_snap);
@@ -3222,7 +3574,7 @@ void MSEGControlRegion::rebuild()
         hSnapButton->setHoverSwitchDrawable(hoverBmp);
         addAndMakeVisible(*hSnapButton);
 
-        snprintf(svt, 255, "%d", (int)round(1.f / ms->hSnapDefault));
+        svt = fmt::format("{:d}", (int)round(1.f / ms->hSnapDefault));
 
         hSnapSize = std::make_unique<Surge::Widgets::NumberField>();
         hSnapSize->setControlMode(Surge::Skin::Parameters::MSEG_SNAP_H);
@@ -3238,12 +3590,21 @@ void MSEGControlRegion::rebuild()
         hSnapSize->setHoverBackgroundDrawable(images[1]);
         hSnapSize->setTextColour(skin->getColor(Colors::MSEGEditor::NumberField::Text));
         hSnapSize->setHoverTextColour(skin->getColor(Colors::MSEGEditor::NumberField::TextHover));
+        hSnapSize->onReturnPressed = [w = juce::Component::SafePointer(this)](auto tag, auto nf) {
+            if (w)
+            {
+                w->hvSnapTypein(true);
+                return true;
+            }
+            return false;
+        };
         addAndMakeVisible(*hSnapSize);
 
         xpos += segWidth;
 
         vSnapButton = std::make_unique<Surge::Widgets::Switch>();
         vSnapButton->setSkin(skin, associatedBitmapStore);
+        vSnapButton->setStorage(storage);
         vSnapButton->addListener(this);
         vSnapButton->setBounds(xpos, ypos - 1, btnWidth, buttonHeight);
         vSnapButton->setTag(tag_vertical_snap);
@@ -3255,7 +3616,7 @@ void MSEGControlRegion::rebuild()
         vSnapButton->setHoverSwitchDrawable(hoverBmp);
         addAndMakeVisible(*vSnapButton);
 
-        snprintf(svt, 255, "%d", (int)round(1.f / ms->vSnapDefault));
+        svt = fmt::format("{:d}", (int)round(1.f / ms->vSnapDefault));
 
         vSnapSize = std::make_unique<Surge::Widgets::NumberField>();
         vSnapSize->setTag(tag_vertical_value);
@@ -3271,12 +3632,21 @@ void MSEGControlRegion::rebuild()
         vSnapSize->setHoverBackgroundDrawable(images[1]);
         vSnapSize->setTextColour(skin->getColor(Colors::MSEGEditor::NumberField::Text));
         vSnapSize->setHoverTextColour(skin->getColor(Colors::MSEGEditor::NumberField::TextHover));
+        vSnapSize->onReturnPressed = [w = juce::Component::SafePointer(this)](auto tag, auto nf) {
+            if (w)
+            {
+                w->hvSnapTypein(false);
+                return true;
+            }
+            return false;
+        };
         addAndMakeVisible(*vSnapSize);
     }
 }
 
 MSEGEditor::MSEGEditor(SurgeStorage *storage, LFOStorage *lfodata, MSEGStorage *ms, State *eds,
-                       Surge::GUI::Skin::ptr_t skin, std::shared_ptr<SurgeImageStore> bmp)
+                       Surge::GUI::Skin::ptr_t skin, std::shared_ptr<SurgeImageStore> bmp,
+                       SurgeGUIEditor *sge)
     : OverlayComponent("MSEG Editor")
 {
     // Leave these in for now
@@ -3286,8 +3656,9 @@ MSEGEditor::MSEGEditor(SurgeStorage *storage, LFOStorage *lfodata, MSEGStorage *
     }
     setSkin(skin, bmp);
 
-    canvas = std::make_unique<MSEGCanvas>(storage, lfodata, ms, eds, skin, bmp);
-    controls = std::make_unique<MSEGControlRegion>(nullptr, storage, lfodata, ms, eds, skin, bmp);
+    canvas = std::make_unique<MSEGCanvas>(storage, lfodata, ms, eds, skin, bmp, sge);
+    controls =
+        std::make_unique<MSEGControlRegion>(nullptr, storage, lfodata, ms, eds, skin, bmp, sge);
 
     canvas->controlregion = controls.get();
     controls->canvas = canvas.get();
@@ -3307,6 +3678,9 @@ void MSEGEditor::forceRefresh()
         auto ed = dynamic_cast<MSEGCanvas *>(kid);
         if (ed)
             ed->modelChanged();
+        auto cr = dynamic_cast<MSEGControlRegion *>(kid);
+        if (cr)
+            cr->rebuild();
     }
 }
 

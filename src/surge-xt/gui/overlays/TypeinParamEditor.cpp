@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "TypeinParamEditor.h"
 #include "RuntimeFont.h"
@@ -30,7 +37,6 @@ TypeinParamEditor::TypeinParamEditor()
     textEd = std::make_unique<juce::TextEditor>("typeinParamEditor");
     textEd->addListener(this);
     textEd->setSelectAllWhenFocused(true);
-    textEd->setFont(Surge::GUI::getFontManager()->getLatoAtSize(11));
     textEd->setIndents(4, (textEd->getHeight() - textEd->getTextHeight()) / 2);
     textEd->setJustification(juce::Justification::centred);
     textEd->setTitle("New Value");
@@ -47,13 +53,14 @@ void TypeinParamEditor::paint(juce::Graphics &g)
     g.setColour(skin->getColor(Colors::Dialog::Border));
     g.drawRect(getLocalBounds());
 
-    g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(10));
+    g.setFont(skin->fontManager->getLatoAtSize(10));
     g.setColour(skin->getColor(Colors::Dialog::Label::Text));
 
-    auto r = getLocalBounds().translated(0, 2).withHeight(14);
+    auto r =
+        getLocalBounds().translated(0, 2).withHeight(14).withTrimmedLeft(2).withTrimmedRight(2);
     g.drawText(mainLabel, r, juce::Justification::centred);
 
-    g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(8));
+    g.setFont(skin->fontManager->getLatoAtSize(8));
 
     if (isMod)
     {
@@ -66,7 +73,7 @@ void TypeinParamEditor::paint(juce::Graphics &g)
     if (wasInputInvalid)
     {
         g.setColour(skin->getColor(Colors::Dialog::Label::Error));
-        g.drawText("Input out of range!", r, juce::Justification::centred);
+        g.drawText(errorToDisplay, r, juce::Justification::centred, false);
     }
     else
     {
@@ -85,7 +92,7 @@ void TypeinParamEditor::paint(juce::Graphics &g)
 juce::Rectangle<int> TypeinParamEditor::getRequiredSize()
 {
     int ht = 50 + (isMod ? 24 : 0);
-    auto r = juce::Rectangle<int>(0, 0, 144, ht);
+    auto r = juce::Rectangle<int>(0, 0, 180, ht);
     return r;
 }
 
@@ -93,11 +100,35 @@ void TypeinParamEditor::setBoundsToAccompany(const juce::Rectangle<int> &control
                                              const juce::Rectangle<int> &parentRect)
 {
     auto r = getRequiredSize();
-    r = r.withX(controlRect.getX()).withY(controlRect.getY() - r.getHeight());
+
+    auto rw = r.getWidth();
+    auto cw = controlRect.getWidth();
+    auto dw = (rw - cw) / 2;
+    r = r.withX(controlRect.getX() - dw).withY(controlRect.getY() - r.getHeight());
 
     if (!parentRect.contains(r))
     {
-        r = r.withY(controlRect.getBottom());
+        int margin = 1;
+
+        if (r.getX() < 0)
+        {
+            r = r.withX(margin);
+        }
+
+        if (r.getY() < 0)
+        {
+            r = r.withY(controlRect.getBottom());
+        }
+
+        if (r.getRight() > parentRect.getWidth())
+        {
+            r = r.withRightX(parentRect.getWidth() - margin);
+        }
+
+        if (r.getBottom() > parentRect.getHeight())
+        {
+            r = r.withBottom(controlRect.getY());
+        }
     }
 
     setBounds(r);
@@ -105,7 +136,7 @@ void TypeinParamEditor::setBoundsToAccompany(const juce::Rectangle<int> &control
 
 void TypeinParamEditor::resized()
 {
-    auto ter = juce::Rectangle<int>(0, getHeight() - 24, 144, 22).reduced(4, 2);
+    auto ter = juce::Rectangle<int>(0, getHeight() - 24, getWidth(), 22).reduced(4, 2);
     textEd->setBounds(ter);
 }
 
@@ -136,6 +167,8 @@ void TypeinParamEditor::visibilityChanged()
 
 void TypeinParamEditor::onSkinChanged()
 {
+    textEd->setFont(skin->fontManager->getLatoAtSize(11));
+
     textEd->setColour(juce::TextEditor::backgroundColourId,
                       skin->getColor(Colors::Dialog::Entry::Background));
     textEd->setColour(juce::TextEditor::textColourId, skin->getColor(Colors::Dialog::Entry::Text));
@@ -151,21 +184,32 @@ void TypeinParamEditor::onSkinChanged()
     repaint();
 }
 
-bool TypeinParamEditor::handleTypein(const std::string &value)
+bool TypeinParamEditor::handleTypein(const std::string &value, std::string &errMsg)
 {
     if (!editor)
         return false;
 
     bool res = false;
+
     if (typeinMode == Param)
     {
         if (p && ms > 0)
         {
-            res = editor->setParameterModulationFromString(p, ms, modScene, modidx, value);
+            res = editor->setParameterModulationFromString(p, ms, modScene, modidx, value, errMsg);
+
+            bool focusModEditor = Surge::Storage::getUserDefaultValue(
+                &(editor->synth->storage), Surge::Storage::FocusModEditorAfterAddModulationFrom,
+                false);
+
+            if (activateModsourceAfterEnter > -1 && focusModEditor)
+            {
+                editor->setModsourceSelected(ms, modidx);
+                activateModsourceAfterEnter = -1;
+            }
         }
         else
         {
-            res = editor->setParameterFromString(p, value);
+            res = editor->setParameterFromString(p, value, errMsg);
         }
     }
     else
@@ -177,7 +221,7 @@ bool TypeinParamEditor::handleTypein(const std::string &value)
 
 void TypeinParamEditor::textEditorReturnKeyPressed(juce::TextEditor &te)
 {
-    auto res = handleTypein(te.getText().toStdString());
+    auto res = handleTypein(te.getText().toStdString(), errorToDisplay);
 
     if (res)
     {
@@ -188,15 +232,19 @@ void TypeinParamEditor::textEditorReturnKeyPressed(juce::TextEditor &te)
     {
         wasInputInvalid = true;
         repaint();
-        juce::Timer::callAfterDelay(2000, [this]() {
-            wasInputInvalid = false;
-            repaint();
+        juce::Timer::callAfterDelay(5000, [that = juce::Component::SafePointer(this)]() {
+            if (that)
+            {
+                that->wasInputInvalid = false;
+                that->repaint();
+            }
         });
     }
 }
 
 void TypeinParamEditor::textEditorEscapeKeyPressed(juce::TextEditor &te)
 {
+    activateModsourceAfterEnter = -1;
     doReturnFocus();
     setVisible(false);
 }

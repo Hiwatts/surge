@@ -1,20 +1,31 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "ClassicOscillator.h"
 #include "DSPUtils.h"
+
+#include "sst/basic-blocks/mechanics/block-ops.h"
+#include "sst/basic-blocks/mechanics/simd-ops.h"
+namespace mech = sst::basic_blocks::mechanics;
 
 /*
 **
@@ -65,7 +76,7 @@
 ** The storage buffer is sized so there is enough room to run a FIR model of the DAC
 ** forward in time from the point of the current buffer. This means when we wrap
 ** the buffer position we need to copy the back-end FIR buffer into the front of the new
-** buffer. Other than that subtletly, the buffer is just a ring.
+** buffer. Other than that subtlety, the buffer is just a ring.
 **
 ** There's lots more details but that's the basic operating model you will see in
 ** ::process_block once you know that ::convolute generates the next blast
@@ -141,7 +152,7 @@ AbstractBlitOscillator::AbstractBlitOscillator(SurgeStorage *storage, Oscillator
                                                pdata *localcopy)
     : Oscillator(storage, oscdata, localcopy)
 {
-    integrator_hpf = (1.f - 2.f * 20.f * samplerate_inv);
+    integrator_hpf = (1.f - 2.f * 20.f * storage->samplerate_inv);
     integrator_hpf *= integrator_hpf;
 }
 
@@ -163,7 +174,7 @@ void AbstractBlitOscillator::prepare_unison(int voices)
 
 ClassicOscillator::ClassicOscillator(SurgeStorage *storage, OscillatorStorage *oscdata,
                                      pdata *localcopy)
-    : AbstractBlitOscillator(storage, oscdata, localcopy)
+    : AbstractBlitOscillator(storage, oscdata, localcopy), charFilt(storage)
 {
 }
 
@@ -175,10 +186,10 @@ void ClassicOscillator::init(float pitch, bool is_display, bool nonzero_init_dri
     first_run = true;
     charFilt.init(storage->getPatch().character.val.i);
 
-    osc_out = _mm_set1_ps(0.f);
-    osc_out2 = _mm_set1_ps(0.f);
-    osc_outR = _mm_set1_ps(0.f);
-    osc_out2R = _mm_set1_ps(0.f);
+    osc_out = SIMD_MM(set1_ps)(0.f);
+    osc_out2 = SIMD_MM(set1_ps)(0.f);
+    osc_outR = SIMD_MM(set1_ps)(0.f);
+    osc_out2R = SIMD_MM(set1_ps)(0.f);
     bufpos = 0;
     dc = 0;
 
@@ -372,8 +383,9 @@ template <bool FM> void ClassicOscillator::convolute(int voice, bool stereo)
     */
     unsigned int m = ((ipos >> 16) & 0xff) * (FIRipol_N << 1);
     unsigned int lipolui16 = (ipos & 0xffff);
-    __m128 lipol128 = _mm_cvtsi32_ss(lipol128, lipolui16);
-    lipol128 = _mm_shuffle_ps(lipol128, lipol128, _MM_SHUFFLE(0, 0, 0, 0));
+    auto lipol128 = SIMD_MM(setzero_ps)();
+    lipol128 = SIMD_MM(cvtsi32_ss)(lipol128, lipolui16);
+    lipol128 = SIMD_MM(shuffle_ps)(lipol128, lipol128, SIMD_MM_SHUFFLE(0, 0, 0, 0));
 
     int k;
     const float s = 0.99952f;
@@ -429,7 +441,7 @@ template <bool FM> void ClassicOscillator::convolute(int voice, bool stereo)
         t = storage->note_to_pitch_inv_tuningctr(detune + sync);
     }
 
-    float t_inv = rcp(t);
+    float t_inv = mech::rcp(t);
     float g = 0.0, gR = 0.0;
 
     /*
@@ -483,25 +495,25 @@ template <bool FM> void ClassicOscillator::convolute(int voice, bool stereo)
 
     if (stereo)
     {
-        __m128 g128L = _mm_load_ss(&g);
-        g128L = _mm_shuffle_ps(g128L, g128L, _MM_SHUFFLE(0, 0, 0, 0));
-        __m128 g128R = _mm_load_ss(&gR);
-        g128R = _mm_shuffle_ps(g128R, g128R, _MM_SHUFFLE(0, 0, 0, 0));
+        auto g128L = SIMD_MM(load_ss)(&g);
+        g128L = SIMD_MM(shuffle_ps)(g128L, g128L, SIMD_MM_SHUFFLE(0, 0, 0, 0));
+        auto g128R = SIMD_MM(load_ss)(&gR);
+        g128R = SIMD_MM(shuffle_ps)(g128R, g128R, SIMD_MM_SHUFFLE(0, 0, 0, 0));
 
         for (k = 0; k < FIRipol_N; k += 4)
         {
             float *obfL = &oscbuffer[bufpos + k + delay];
             float *obfR = &oscbufferR[bufpos + k + delay];
-            __m128 obL = _mm_loadu_ps(obfL);
-            __m128 obR = _mm_loadu_ps(obfR);
-            __m128 st = _mm_load_ps(&sinctable[m + k]);
-            __m128 so = _mm_load_ps(&sinctable[m + k + FIRipol_N]);
-            so = _mm_mul_ps(so, lipol128);
-            st = _mm_add_ps(st, so);
-            obL = _mm_add_ps(obL, _mm_mul_ps(st, g128L));
-            _mm_storeu_ps(obfL, obL);
-            obR = _mm_add_ps(obR, _mm_mul_ps(st, g128R));
-            _mm_storeu_ps(obfR, obR);
+            auto obL = SIMD_MM(loadu_ps)(obfL);
+            auto obR = SIMD_MM(loadu_ps)(obfR);
+            auto st = SIMD_MM(load_ps)(&storage->sinctable[m + k]);
+            auto so = SIMD_MM(load_ps)(&storage->sinctable[m + k + FIRipol_N]);
+            so = SIMD_MM(mul_ps)(so, lipol128);
+            st = SIMD_MM(add_ps)(st, so);
+            obL = SIMD_MM(add_ps)(obL, SIMD_MM(mul_ps)(st, g128L));
+            SIMD_MM(storeu_ps)(obfL, obL);
+            obR = SIMD_MM(add_ps)(obR, SIMD_MM(mul_ps)(st, g128R));
+            SIMD_MM(storeu_ps)(obfR, obR);
         }
     }
     else
@@ -509,21 +521,22 @@ template <bool FM> void ClassicOscillator::convolute(int voice, bool stereo)
         /*
         ** This is SSE for the convolution described above
         */
-        __m128 g128 = _mm_load_ss(&g);
-        g128 = _mm_shuffle_ps(g128, g128, _MM_SHUFFLE(0, 0, 0, 0));
+        auto g128 = SIMD_MM(load_ss)(&g);
+        g128 = SIMD_MM(shuffle_ps)(g128, g128, SIMD_MM_SHUFFLE(0, 0, 0, 0));
 
         for (k = 0; k < FIRipol_N; k += 4)
         {
             float *obf = &oscbuffer[bufpos + k + delay]; // Get buffer[pos + delay + k ]
-            __m128 ob = _mm_loadu_ps(obf);
-            __m128 st =
-                _mm_load_ps(&sinctable[m + k]); // get the sinctable for our fractional position
-            __m128 so = _mm_load_ps(&sinctable[m + k + FIRipol_N]); // get the sinctable deriv
-            so = _mm_mul_ps(so, lipol128); // scale the deriv by the lipol fractional time
-            st = _mm_add_ps(st, so);       // this is now st = sinctable + dt * dsinctable
-            st = _mm_mul_ps(st, g128);     // so this is now the convolved difference, g * kernel
-            ob = _mm_add_ps(ob, st);       // which we add back onto the buffer
-            _mm_storeu_ps(obf, ob);        // and store.
+            auto ob = SIMD_MM(loadu_ps)(obf);
+            auto st = SIMD_MM(load_ps)(
+                &storage->sinctable[m + k]); // get the sinctable for our fractional position
+            auto so =
+                SIMD_MM(load_ps)(&storage->sinctable[m + k + FIRipol_N]); // get the sinctable deriv
+            so = SIMD_MM(mul_ps)(so, lipol128); // scale the deriv by the lipol fractional time
+            st = SIMD_MM(add_ps)(st, so);       // this is now st = sinctable + dt * dsinctable
+            st = SIMD_MM(mul_ps)(st, g128); // so this is now the convolved difference, g * kernel
+            ob = SIMD_MM(add_ps)(ob, st);   // which we add back onto the buffer
+            SIMD_MM(storeu_ps)(obf, ob);    // and store.
         }
     }
 
@@ -570,7 +583,7 @@ template <bool is_init> void ClassicOscillator::update_lagvals()
 
     // keytracked highpass filter that deforms the mathematically perfect BLIT waveforms
     auto pp = storage->note_to_pitch_tuningctr(pitch + l_sync.v);
-    float invt = 4.f * min(1.0, (8.175798915 * pp * dsamplerate_os_inv));
+    float invt = 4.f * min(1.0, (8.175798915 * pp * storage->dsamplerate_os_inv));
     // TODO: Make a lookup table
     float hpf2 = min(integrator_hpf, powf(hpf_cycle_loss, invt));
 
@@ -597,8 +610,8 @@ void ClassicOscillator::process_block(float pitch0, float drift, bool stereo, bo
     */
     this->pitch = min(148.f, pitch0);
     this->drift = drift;
-    pitchmult_inv =
-        std::max(1.0, dsamplerate_os * (1.f / 8.175798915f) * storage->note_to_pitch_inv(pitch));
+    pitchmult_inv = std::max(1.0, storage->dsamplerate_os * (1.f / 8.175798915f) *
+                                      storage->note_to_pitch_inv(pitch));
     // This must be a real division, reciprocal approximation is not precise enough
     pitchmult = 1.f / pitchmult_inv;
 
@@ -616,9 +629,7 @@ void ClassicOscillator::process_block(float pitch0, float drift, bool stereo, bo
 
     if (FM)
     {
-        /*
-        ** FIXME - document the FM branch
-        */
+        // FIXME - document the FM branch
         for (l = 0; l < n_unison; l++)
         {
             driftLFO[l].next();
@@ -635,7 +646,8 @@ void ClassicOscillator::process_block(float pitch0, float drift, bool stereo, bo
             {
                 while (((l_sync.v > 0) && (syncstate[l] < a)) || (oscstate[l] < a))
                 {
-                    FMmul_inv = rcp(fmmul);
+                    FMmul_inv = mech::rcp(fmmul);
+
                     // The division races with the growth of the oscstate so that it never comes out
                     // of/gets out of the loop this becomes unsafe, don't fuck with the oscstate but
                     // make a division within the convolute instead.
@@ -703,44 +715,44 @@ void ClassicOscillator::process_block(float pitch0, float drift, bool stereo, bo
     /*
     ** And the DC offset and pitch-scaled output attenuation
     */
-    __m128 mdc = _mm_load_ss(&dc);
-    __m128 oa = _mm_load_ss(&out_attenuation);
-    oa = _mm_mul_ss(oa, _mm_load_ss(&pitchmult));
+    auto mdc = SIMD_MM(load_ss)(&dc);
+    auto oa = SIMD_MM(load_ss)(&out_attenuation);
+    oa = SIMD_MM(mul_ss)(oa, SIMD_MM(load_ss)(&pitchmult));
 
     /*
     ** The Coefs here are from the character filter, and are set in ::init
     */
-    const __m128 mmone = _mm_set_ss(1.0f);
-    __m128 char_b0 = _mm_load_ss(&(charFilt.CoefB0));
-    __m128 char_b1 = _mm_load_ss(&(charFilt.CoefB1));
-    __m128 char_a1 = _mm_load_ss(&(charFilt.CoefA1));
+    const auto mmone = SIMD_MM(set_ss)(1.0f);
+    auto char_b0 = SIMD_MM(load_ss)(&(charFilt.CoefB0));
+    auto char_b1 = SIMD_MM(load_ss)(&(charFilt.CoefB1));
+    auto char_a1 = SIMD_MM(load_ss)(&(charFilt.CoefA1));
 
     for (k = 0; k < BLOCK_SIZE_OS; k++)
     {
-        __m128 dcb = _mm_load_ss(&dcbuffer[bufpos + k]);
-        __m128 hpf = _mm_load_ss(&hpfblock[k]);
-        __m128 ob = _mm_load_ss(&oscbuffer[bufpos + k]);
+        auto dcb = SIMD_MM(load_ss)(&dcbuffer[bufpos + k]);
+        auto hpf = SIMD_MM(load_ss)(&hpfblock[k]);
+        auto ob = SIMD_MM(load_ss)(&oscbuffer[bufpos + k]);
 
         /*
         ** a = prior output * HPF value
         */
-        __m128 a = _mm_mul_ss(osc_out, hpf);
+        auto a = SIMD_MM(mul_ss)(osc_out, hpf);
 
         /*
         ** mdc += DC level
         */
-        mdc = _mm_add_ss(mdc, dcb);
+        mdc = SIMD_MM(add_ss)(mdc, dcb);
 
         /*
         ** output buffer += DC * out attenuation
         */
-        ob = _mm_sub_ss(ob, _mm_mul_ss(mdc, oa));
+        ob = SIMD_MM(sub_ss)(ob, SIMD_MM(mul_ss)(mdc, oa));
 
         /*
         ** Stow away the last output and make the new output the oscbuffer + the filter controbution
         */
-        __m128 LastOscOut = osc_out;
-        osc_out = _mm_add_ss(a, ob);
+        auto LastOscOut = osc_out;
+        osc_out = SIMD_MM(add_ss)(a, ob);
 
         /*
         ** So at that point osc_out = a + ob; = prior_out * HPF + oscbuffer + DC * attenuation;
@@ -754,50 +766,50 @@ void ClassicOscillator::process_block(float pitch0, float drift, bool stereo, bo
         ** which is the classic biquad formula.
         */
 
-        osc_out2 =
-            _mm_add_ss(_mm_mul_ss(osc_out2, char_a1),
-                       _mm_add_ss(_mm_mul_ss(osc_out, char_b0), _mm_mul_ss(LastOscOut, char_b1)));
+        osc_out2 = SIMD_MM(add_ss)(SIMD_MM(mul_ss)(osc_out2, char_a1),
+                                   SIMD_MM(add_ss)(SIMD_MM(mul_ss)(osc_out, char_b0),
+                                                   SIMD_MM(mul_ss)(LastOscOut, char_b1)));
 
         /*
         ** And so store the output of the HPF as the output
         */
-        _mm_store_ss(&output[k], osc_out2);
+        SIMD_MM(store_ss)(&output[k], osc_out2);
 
         // And do it all again if we are stereo
         if (stereo)
         {
-            ob = _mm_load_ss(&oscbufferR[bufpos + k]);
+            ob = SIMD_MM(load_ss)(&oscbufferR[bufpos + k]);
 
-            a = _mm_mul_ss(osc_outR, hpf);
+            a = SIMD_MM(mul_ss)(osc_outR, hpf);
 
-            ob = _mm_sub_ss(ob, _mm_mul_ss(mdc, oa));
-            __m128 LastOscOutR = osc_outR;
-            osc_outR = _mm_add_ss(a, ob);
+            ob = SIMD_MM(sub_ss)(ob, SIMD_MM(mul_ss)(mdc, oa));
+            auto LastOscOutR = osc_outR;
+            osc_outR = SIMD_MM(add_ss)(a, ob);
 
-            osc_out2R = _mm_add_ss(
-                _mm_mul_ss(osc_out2R, char_a1),
-                _mm_add_ss(_mm_mul_ss(osc_outR, char_b0), _mm_mul_ss(LastOscOutR, char_b1)));
+            osc_out2R = SIMD_MM(add_ss)(SIMD_MM(mul_ss)(osc_out2R, char_a1),
+                                        SIMD_MM(add_ss)(SIMD_MM(mul_ss)(osc_outR, char_b0),
+                                                        SIMD_MM(mul_ss)(LastOscOutR, char_b1)));
 
-            _mm_store_ss(&outputR[k], osc_out2R);
+            SIMD_MM(store_ss)(&outputR[k], osc_out2R);
         }
     }
 
     /*
     ** Store the DC accumulation
     */
-    _mm_store_ss(&dc, mdc);
+    SIMD_MM(store_ss)(&dc, mdc);
 
     /*
     ** And clean up and advance our buffer pointer
     */
-    clear_block(&oscbuffer[bufpos], BLOCK_SIZE_OS_QUAD);
+    mech::clear_block<BLOCK_SIZE_OS>(&oscbuffer[bufpos]);
 
     if (stereo)
     {
-        clear_block(&oscbufferR[bufpos], BLOCK_SIZE_OS_QUAD);
+        mech::clear_block<BLOCK_SIZE_OS>(&oscbufferR[bufpos]);
     }
 
-    clear_block(&dcbuffer[bufpos], BLOCK_SIZE_OS_QUAD);
+    mech::clear_block<BLOCK_SIZE_OS>(&dcbuffer[bufpos]);
 
     bufpos = (bufpos + BLOCK_SIZE_OS) & (OB_LENGTH - 1);
 
@@ -807,24 +819,24 @@ void ClassicOscillator::process_block(float pitch0, float drift, bool stereo, bo
     */
     if (bufpos == 0) // only needed if the new bufpos == 0
     {
-        __m128 overlap[FIRipol_N >> 2], dcoverlap[FIRipol_N >> 2], overlapR[FIRipol_N >> 2];
-        const __m128 zero = _mm_setzero_ps();
+        SIMD_M128 overlap[FIRipol_N >> 2], dcoverlap[FIRipol_N >> 2], overlapR[FIRipol_N >> 2];
+        const auto zero = SIMD_MM(setzero_ps)();
 
         for (k = 0; k < (FIRipol_N); k += 4)
         {
-            overlap[k >> 2] = _mm_load_ps(&oscbuffer[OB_LENGTH + k]);
-            _mm_store_ps(&oscbuffer[k], overlap[k >> 2]);
-            _mm_store_ps(&oscbuffer[OB_LENGTH + k], zero);
+            overlap[k >> 2] = SIMD_MM(load_ps)(&oscbuffer[OB_LENGTH + k]);
+            SIMD_MM(store_ps)(&oscbuffer[k], overlap[k >> 2]);
+            SIMD_MM(store_ps)(&oscbuffer[OB_LENGTH + k], zero);
 
-            dcoverlap[k >> 2] = _mm_load_ps(&dcbuffer[OB_LENGTH + k]);
-            _mm_store_ps(&dcbuffer[k], dcoverlap[k >> 2]);
-            _mm_store_ps(&dcbuffer[OB_LENGTH + k], zero);
+            dcoverlap[k >> 2] = SIMD_MM(load_ps)(&dcbuffer[OB_LENGTH + k]);
+            SIMD_MM(store_ps)(&dcbuffer[k], dcoverlap[k >> 2]);
+            SIMD_MM(store_ps)(&dcbuffer[OB_LENGTH + k], zero);
 
             if (stereo)
             {
-                overlapR[k >> 2] = _mm_load_ps(&oscbufferR[OB_LENGTH + k]);
-                _mm_store_ps(&oscbufferR[k], overlapR[k >> 2]);
-                _mm_store_ps(&oscbufferR[OB_LENGTH + k], zero);
+                overlapR[k >> 2] = SIMD_MM(load_ps)(&oscbufferR[OB_LENGTH + k]);
+                SIMD_MM(store_ps)(&oscbufferR[k], overlapR[k >> 2]);
+                SIMD_MM(store_ps)(&oscbufferR[OB_LENGTH + k], zero);
             }
         }
     }

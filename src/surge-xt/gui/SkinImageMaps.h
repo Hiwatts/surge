@@ -1,5 +1,24 @@
-// cat src/common/resource.h | perl scripts/misc/idmap.pl > src/common/gui/SkinImageMaps.h if you
-// want to regen this
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 inline std::unordered_map<std::string, int> createIdNameMap()
 {
     std::unordered_map<std::string, int> res;
@@ -61,6 +80,9 @@ inline std::unordered_map<std::string, int> createIdNameMap()
     res["MODMENU_ICONS"] = 185;
     res["FAVORITE_BUTTON"] = 186;
     res["SEARCH_BUTTON"] = 187;
+    res["FAVICON_MENU"] = 188;
+    res["UNDO_BUTTON"] = 189;
+    res["REDO_BUTTON"] = 190;
     res["MSEG_NODES"] = 301;
     res["MSEG_MOVEMENT_MODE"] = 302;
     res["MSEG_VERTICAL_SNAP"] = 303;
@@ -93,7 +115,6 @@ inline std::unordered_set<int> allowedImageIds()
     allowed.insert(134);
     allowed.insert(136);
     allowed.insert(137);
-    allowed.insert(140);
     allowed.insert(140);
     allowed.insert(143);
     allowed.insert(144);
@@ -133,6 +154,10 @@ inline std::unordered_set<int> allowedImageIds()
     allowed.insert(185);
     allowed.insert(186);
     allowed.insert(187);
+    allowed.insert(188);
+    allowed.insert(189);
+    allowed.insert(190);
+    allowed.insert(191);
     allowed.insert(301);
     allowed.insert(302);
     allowed.insert(303);

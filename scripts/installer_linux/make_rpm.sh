@@ -7,7 +7,7 @@
 # check to ensure rpm build tool exists
 if ! [[ -x "$(command -v rpmbuild)" ]]
 then
-    echo "rpmbuild not found! Please install rpm build tools"
+    echo "rpmbuild not found! Please install rpm build tools!"
     exit -1
 fi
 
@@ -17,9 +17,9 @@ if [[ "$#" -ne 4 ]]; then
     echo
     echo "    make_rpm.sh INDIR SOURCEDIR TARGET_DIR VERSION"
     echo
-    echo "    INDIR       Location of Intermediate build artifacts"
-    echo "    SOURCEDIR   Location of source code / license file"
-    echo "    TARGET_DIR  where to put the output"
+    echo "    INDIR       Location of intermediate build artifacts"
+    echo "    SOURCEDIR   Location of source code/license file"
+    echo "    TARGET_DIR  Where to put the output"
     echo "    VERSION     build/rpm version"
     echo
     exit -1
@@ -63,7 +63,7 @@ PACKAGE_NAME=surge-xt
 # Date in RFC format for the Changelog
 DATE_RFC=`date --rfc-email`
 # Date in Day-of-Week Month Day Year format for the rpm config header.
-DATE_RPM=`date`
+DATE_RPM=`date +"%a %b %d %Y"`
 MSG=`git log -n 1 --pretty="%s (git hash %H)"`
 
 # generate changelog to put in install package
@@ -72,7 +72,7 @@ cat <<EOT > changelog.txt
 ${PACKAGE_NAME} (${VERSION}) stable; urgency=medium
 
    * ${MSG}
-   * For more details see https://github.com/surge-synthesizer/surge
+   * For more details, see: https://github.com/surge-synthesizer/surge
 
   -- Surge Synthesizer Team <noreply@github.com>  ${DATE_RFC}
 EOT
@@ -96,15 +96,15 @@ Group: sound
 
 
 %description
-Subtractive hybrid synthesizer virtual instrument.
-Surge XT includes VST3 instrument formats for use in compatible hosts and a standalone executable
-
+Subtractive hybrid synthesizer virtual instrument
+Surge XT includes VST3 and CLAP instrument formats for use in compatible hosts and a standalone executable
 
 %install
 install -m 0755 -d %{buildroot}%{_bindir}/
 install -m 0755 -d %{buildroot}%{_datadir}/
 install -m 0755 -d %{buildroot}%{_defaultdocdir}/
 install -m 0755 -d %{buildroot}%{_libdir}/vst3/
+install -m 0755 -d %{buildroot}%{_libdir}/clap/
 install -m 0755 -d %{buildroot}%{_libdir}/lv2/
 install -m 0755 -d %{buildroot}%{_datarootdir}
 install -m 0755 -d %{buildroot}%{_datarootdir}/surge-xt/
@@ -115,11 +115,18 @@ install -m 0644 $(pwd)/changelog.txt %{buildroot}%{_datarootdir}/surge-xt/doc/ch
 cp -r ${SOURCEDIR}/resources/data/* %{buildroot}%{_datarootdir}/surge-xt/
 cp -r "${INDIR}/Surge XT.vst3" %{buildroot}%{_libdir}/vst3/
 cp -r "${INDIR}/Surge XT Effects.vst3" %{buildroot}%{_libdir}/vst3/
+cp -r "${INDIR}/Surge XT.clap" %{buildroot}%{_libdir}/clap/
+cp -r "${INDIR}/Surge XT Effects.clap" %{buildroot}%{_libdir}/clap/
 cp -r "${INDIR}/Surge XT.lv2" %{buildroot}%{_libdir}/lv2/
 cp -r "${INDIR}/Surge XT Effects.lv2" %{buildroot}%{_libdir}/lv2/
 
+# I have no idea why the docker image makes these
+rm -rf "%{buildroot}%{_libdir}/.build-id"
+rm -rf "%{buildroot}lib/.build-id"
+
 # install executable files as executable
 install -m 0755 "${INDIR}/Surge XT" %{buildroot}/%{_bindir}
+install -m 0755 "${INDIR}/surge-xt-cli" %{buildroot}/%{_bindir}
 install -m 0755 "${INDIR}/Surge XT Effects" %{buildroot}/%{_bindir}
 
 # set permissions on shared libraries
@@ -128,19 +135,22 @@ find %{buildroot}%{_libdir}/vst3/ -type f -iname "*.so" -exec chmod 0644 {} +
 
 %files
 "%{_bindir}/Surge XT"
+"%{_bindir}/surge-xt-cli"
 "%{_bindir}/Surge XT Effects"
 "%{_libdir}/vst3/Surge XT.vst3"
-"%{_libdir}/lv2/Surge XT.lv2"
 "%{_libdir}/vst3/Surge XT Effects.vst3"
+"%{_libdir}/clap/Surge XT.clap"
+"%{_libdir}/clap/Surge XT Effects.clap"
+"%{_libdir}/lv2/Surge XT.lv2"
 "%{_libdir}/lv2/Surge XT Effects.lv2"
 "%{_datarootdir}/surge-xt/*"
 
 
 %changelog
 * ${DATE_RPM} Surge Synthesizer Team <noreply@github.com>  - ${VERSION}
-- Initial SurgeXT package
+- Surge XT package
 - ${MSG} ${DATE_RFC}
-- For more details see https://github.com/surge-synthesizer/surge
+- For more details, see: https://github.com/surge-synthesizer/surge
 
 EOT
 
@@ -158,7 +168,7 @@ mv $RPM_BUILD_DIR/RPMS/$ARCH/$PACKAGE_NAME-${RPM_VERSION}-$RPM_RELEASE.$ARCH.rpm
 
 if [[ $? -ne 0 ]]
 then
-    echo ERROR moving rpm file, RPMBUILD Failed!
+    echo Error moving rpm file, rpmbuild failed!
     popd
     exit -1
 fi

@@ -1,10 +1,27 @@
-//
-// Created by Paul Walker on 7/10/21.
-//
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "WaveShaperSelector.h"
 #include "RuntimeFont.h"
-#include "QuadFilterWaveshaper.h"
 #include "DSPUtils.h"
 #include <iostream>
 #include "AccessibleHelpers.h"
@@ -15,9 +32,14 @@ namespace Surge
 {
 namespace Widgets
 {
-std::array<std::vector<std::pair<float, float>>, n_ws_types> WaveShaperSelector::wsCurves;
+using WaveshaperType = sst::waveshapers::WaveshaperType;
+std::array<std::vector<std::pair<float, float>>, (int)WaveshaperType::n_ws_types>
+    WaveShaperSelector::wsCurves;
 
-WaveShaperSelector::WaveShaperSelector() {}
+WaveShaperSelector::WaveShaperSelector()
+    : juce::Component(), WidgetBaseMixin<WaveShaperSelector>(this)
+{
+}
 
 WaveShaperSelector::~WaveShaperSelector() {}
 
@@ -25,12 +47,12 @@ void WaveShaperSelector::paint(juce::Graphics &g)
 {
     float dOpacity = (isDeactivated ? 0.5 : 1.0);
     float dThick = (isDeactivated ? 0.6 : 1.0);
-    if (wsCurves[iValue].empty())
+    if (wsCurves[(int)iValue].empty())
     {
         /*
          * The waveshapers are re-entrant as long as they have a unique state pointer
          */
-        auto drive = _mm_set1_ps(1.f);
+        auto drive = SIMD_MM(set1_ps)(1.f);
         float xs alignas(16)[4], vals alignas(16)[4];
 
         for (int i = 0; i < 4; ++i)
@@ -39,18 +61,18 @@ void WaveShaperSelector::paint(juce::Graphics &g)
             vals[0] = 0.f;
         }
 
-        auto wsop = GetQFPtrWaveshaper(iValue);
-        QuadFilterWaveshaperState s;
+        auto wsop = sst::waveshapers::GetQuadWaveshaper(iValue);
+        sst::waveshapers::QuadWaveshaperState s;
         float R alignas(16)[4];
 
-        initializeWaveshaperRegister(iValue, R);
+        sst::waveshapers::initializeWaveshaperRegister(iValue, R);
 
         for (int i = 0; i < 4; ++i)
         {
-            s.R[i] = _mm_load_ps(R);
+            s.R[i] = SIMD_MM(load_ps)(R);
         }
 
-        s.init = _mm_cmpeq_ps(_mm_setzero_ps(), _mm_setzero_ps());
+        s.init = SIMD_MM(cmpeq_ps)(SIMD_MM(setzero_ps)(), SIMD_MM(setzero_ps)());
 
         float dx = 0.05;
 
@@ -60,20 +82,20 @@ void WaveShaperSelector::paint(juce::Graphics &g)
             if (wsop)
             {
                 vals[0] = x;
-                auto in = _mm_load_ps(vals);
+                auto in = SIMD_MM(load_ps)(vals);
                 auto r = wsop(&s, in, drive);
                 for (int i = 0; i < 4; ++i)
-                    s.R[i] = _mm_load_ps(R);
-                s.init = _mm_cmpeq_ps(_mm_setzero_ps(), _mm_setzero_ps());
+                    s.R[i] = SIMD_MM(load_ps)(R);
+                s.init = SIMD_MM(cmpeq_ps)(SIMD_MM(setzero_ps)(), SIMD_MM(setzero_ps)());
 
-                _mm_store_ps(vals, r);
+                SIMD_MM(store_ps)(vals, r);
                 if (x >= -2)
-                    wsCurves[iValue].emplace_back(x, vals[0]);
+                    wsCurves[(int)iValue].emplace_back(x, vals[0]);
             }
             else
             {
                 if (x >= -2)
-                    wsCurves[iValue].emplace_back(x, x);
+                    wsCurves[(int)iValue].emplace_back(x, x);
             }
         }
     }
@@ -97,15 +119,15 @@ void WaveShaperSelector::paint(juce::Graphics &g)
         g.setColour(skin->getColor(Colors::Waveshaper::Text).withAlpha(dOpacity));
     }
 
-    g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(7));
-    g.drawText(wst_ui_names[iValue], getLocalBounds().withHeight(labelHeight),
+    g.setFont(skin->fontManager->getLatoAtSize(7));
+    g.drawText(wst_ui_names[(int)iValue], getLocalBounds().withHeight(labelHeight),
                juce::Justification::centred);
 
     // So the wave is in -2,2 in x and -1,1 in y
     juce::Path curvePath;
     bool f = true;
 
-    for (const auto &el : wsCurves[iValue])
+    for (const auto &el : wsCurves[(int)iValue])
     {
         if (f)
         {
@@ -152,7 +174,8 @@ void WaveShaperSelector::paint(juce::Graphics &g)
             g.setColour(skin->getColor(Colors::Waveshaper::Display::WaveHover).withAlpha(dOpacity));
         else
             g.setColour(skin->getColor(Colors::Waveshaper::Display::Wave).withAlpha(dOpacity));
-        g.strokePath(curvePath, juce::PathStrokeType{iValue == wst_none ? 0.6f : dThick}, xf);
+        g.strokePath(curvePath,
+                     juce::PathStrokeType{iValue == WaveshaperType::wst_none ? 0.6f : dThick}, xf);
     }
 }
 
@@ -165,7 +188,8 @@ void WaveShaperSelector::resized()
 void WaveShaperSelector::setValue(float f)
 {
     value = f;
-    iValue = Parameter::intUnscaledFromFloat(value, n_ws_types - 1, 0);
+    iValue = static_cast<WaveshaperType>(
+        Parameter::intUnscaledFromFloat(value, (int)WaveshaperType::n_ws_types - 1, 0));
     repaint();
 }
 
@@ -176,12 +200,15 @@ void WaveShaperSelector::mouseDoubleClick(const juce::MouseEvent &event)
         notifyControlModifierDoubleClicked(event.mods.allKeyboardModifiers);
     }
 }
+
 void WaveShaperSelector::mouseDown(const juce::MouseEvent &event)
 {
     if (forwardedMainFrameMouseDowns(event))
     {
         return;
     }
+
+    mouseDownLongHold(event);
 
     lastDragDistance = 0;
     everDragged = false;
@@ -199,14 +226,17 @@ void WaveShaperSelector::mouseDown(const juce::MouseEvent &event)
     }
 }
 
-void WaveShaperSelector::mouseDrag(const juce::MouseEvent &e)
+void WaveShaperSelector::mouseDrag(const juce::MouseEvent &event)
 {
-    if (supressMainFrameMouseEvent(e))
+    if (supressMainFrameMouseEvent(event))
     {
         return;
     }
 
-    auto d = e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY();
+    mouseDragLongHold(event);
+
+    auto d = event.getDistanceFromDragStartX() - event.getDistanceFromDragStartY();
+
     if (fabs(d - lastDragDistance) > 0)
     {
         if (!everMoved)
@@ -217,8 +247,10 @@ void WaveShaperSelector::mouseDrag(const juce::MouseEvent &e)
                     true);
             }
         }
+
         everMoved = true;
     }
+
     if (fabs(d - lastDragDistance) > 10)
     {
         if (!everDragged)
@@ -226,7 +258,9 @@ void WaveShaperSelector::mouseDrag(const juce::MouseEvent &e)
             notifyBeginEdit();
             everDragged = true;
         }
+
         int inc = 1;
+
         if (d - lastDragDistance < 0)
         {
             inc = -1;
@@ -239,29 +273,37 @@ void WaveShaperSelector::mouseDrag(const juce::MouseEvent &e)
     }
 }
 
-void WaveShaperSelector::mouseUp(const juce::MouseEvent &e)
+void WaveShaperSelector::mouseUp(const juce::MouseEvent &event)
 {
+    mouseUpLongHold(event);
+
     if (everMoved)
     {
         if (!Surge::GUI::showCursor(storage))
         {
             juce::Desktop::getInstance().getMainMouseSource().enableUnboundedMouseMovement(false);
-            auto p = e.mouseDownPosition;
+
+            auto p = event.mouseDownPosition;
             p = localPointToGlobal(p);
+
             juce::Desktop::getInstance().getMainMouseSource().setScreenPosition(p);
         }
     }
+
     if (everDragged)
     {
         notifyEndEdit();
     }
+
     everDragged = false;
     everMoved = false;
 }
 
-void WaveShaperSelector::mouseWheelMove(const juce::MouseEvent &e, const juce::MouseWheelDetails &w)
+void WaveShaperSelector::mouseWheelMove(const juce::MouseEvent &event,
+                                        const juce::MouseWheelDetails &w)
 {
     int dir = wheelAccumulationHelper.accumulate(w, false, true);
+
     if (dir != 0)
     {
         notifyBeginEdit();
@@ -283,8 +325,8 @@ void WaveShaperSelector::jog(int by)
 
 float WaveShaperSelector::nextValueInOrder(float v, int inc)
 {
-    int iv = Parameter::intUnscaledFromFloat(v, n_ws_types - 1, 0);
-    if (!intOrdering.empty() && n_ws_types == intOrdering.size())
+    int iv = Parameter::intUnscaledFromFloat(v, (int)WaveshaperType::n_ws_types - 1, 0);
+    if (!intOrdering.empty() && (int)WaveshaperType::n_ws_types == intOrdering.size())
     {
         int pidx = 0;
 
@@ -331,17 +373,17 @@ float WaveShaperSelector::nextValueInOrder(float v, int inc)
 
         if (iv < 0)
         {
-            iv = n_ws_types - 1;
+            iv = (int)WaveshaperType::n_ws_types - 1;
         }
 
-        if (iv > n_ws_types - 1)
+        if (iv > (int)WaveshaperType::n_ws_types - 1)
         {
             iv = 0;
         }
     }
 
     // This is the get_value_f01 code
-    float r = Parameter::intScaledToFloat(iv, n_ws_types - 1, 0);
+    float r = Parameter::intScaledToFloat(iv, (int)WaveshaperType::n_ws_types - 1, 0);
 
     return r;
 }
@@ -357,7 +399,7 @@ void WaveShaperSelector::onSkinChanged()
 
 template <> struct DiscreteAHRange<WaveShaperSelector>
 {
-    static int iMaxV(WaveShaperSelector *t) { return n_ws_types - 1; }
+    static int iMaxV(WaveShaperSelector *t) { return (int)WaveshaperType::n_ws_types - 1; }
     static int iMinV(WaveShaperSelector *t) { return 0; }
 };
 
@@ -366,9 +408,9 @@ template <> struct DiscreteAHStringValue<WaveShaperSelector>
     static std::string stringValue(WaveShaperSelector *comp, double ahValue)
     {
         auto r = (int)std::round(ahValue);
-        if (r < 0 || r > n_ws_types - 1)
+        if (r < 0 || r > (int)WaveshaperType::n_ws_types - 1)
             return "ERROR";
-        return wst_names[r];
+        return sst::waveshapers::wst_names[r];
     }
 };
 

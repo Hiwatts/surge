@@ -1,3 +1,27 @@
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+
+#include <juce_gui_extra/juce_gui_extra.h>
+
 #include "TuningOverlays.h"
 #include "RuntimeFont.h"
 #include "SurgeStorage.h"
@@ -8,7 +32,8 @@
 #include "widgets/MultiSwitch.h"
 #include "fmt/core.h"
 #include <chrono>
-#include "juce_gui_extra/juce_gui_extra.h"
+#include "UnitConversions.h"
+#include "libMTSClient.h"
 
 namespace Surge
 {
@@ -19,8 +44,17 @@ class TuningTableListBoxModel : public juce::TableListBoxModel,
                                 public Surge::GUI::SkinConsumingComponent
 {
   public:
-    TuningTableListBoxModel() {}
+    TuningOverlay *parent;
+    TuningTableListBoxModel(TuningOverlay *p) : parent(p) {}
     ~TuningTableListBoxModel() { table = nullptr; }
+
+    SurgeStorage *storage{nullptr};
+    void setStorage(SurgeStorage *s)
+    {
+        storage = s;
+        if (table)
+            table->repaint();
+    }
 
     void setTableListBox(juce::TableListBox *t) { table = t; }
 
@@ -57,148 +91,192 @@ class TuningTableListBoxModel : public juce::TableListBoxModel,
         }
     }
 
-    virtual void paintCell(juce::Graphics &g, int rowNumber, int columnID, int width, int height,
-                           bool rowIsSelected) override
+    struct TuningRowComp : juce::Component
     {
-        namespace clr = Colors::TuningOverlay::FrequencyKeyboard;
+        TuningTableListBoxModel &parent;
+        TuningRowComp(TuningTableListBoxModel &m) : parent(m) {}
 
-        if (!table)
+        int rowNumber{0}, columnID{0};
+        void paint(juce::Graphics &g) override
         {
-            return;
-        }
+            namespace clr = Colors::TuningOverlay::FrequencyKeyboard;
+            auto skin = parent.skin;
+            auto width = getWidth();
+            auto height = getHeight();
 
-        int noteInScale = rowNumber % 12;
-        bool whitekey = true;
-        bool noblack = false;
+            int noteInScale = rowNumber % 12;
+            bool whitekey = true;
+            bool noblack = false;
 
-        if ((noteInScale == 1 || noteInScale == 3 || noteInScale == 6 || noteInScale == 8 ||
-             noteInScale == 10))
-        {
-            whitekey = false;
-        }
-
-        if (noteInScale == 4 || noteInScale == 11)
-        {
-            noblack = true;
-        }
-
-        // black key
-        auto kbdColour = skin->getColor(clr::BlackKey);
-
-        if (whitekey)
-        {
-            kbdColour = skin->getColor(clr::WhiteKey);
-        }
-
-        bool no = false;
-        auto pressedColour = skin->getColor(clr::PressedKey);
-
-        if (notesOn[rowNumber])
-        {
-            no = true;
-            kbdColour = pressedColour;
-        }
-
-        g.fillAll(kbdColour);
-
-        if (!whitekey && columnID != 1)
-        {
-            g.setColour(skin->getColor(clr::Separator));
-            // draw an inset top and bottom
-            g.fillRect(0, 0, width - 1, 1);
-            g.fillRect(0, height - 1, width - 1, 1);
-        }
-
-        int txtOff = 0;
-
-        if (columnID == 1)
-        {
-            // black key
-            if (!whitekey)
+            if ((noteInScale == 1 || noteInScale == 3 || noteInScale == 6 || noteInScale == 8 ||
+                 noteInScale == 10))
             {
-                txtOff = 10;
-                // "black key"
-                auto kbdColour = skin->getColor(clr::BlackKey);
-                auto kbc = skin->getColor(clr::WhiteKey);
+                whitekey = false;
+            }
 
-                g.setColour(kbc);
-                g.fillRect(-1, 0, txtOff, height + 2);
+            if (noteInScale == 4 || noteInScale == 11)
+            {
+                noblack = true;
+            }
 
-                // OK so now check neighbors
-                if (rowNumber > 0 && notesOn[rowNumber - 1])
+            // black key
+            auto kbdColour = skin->getColor(clr::BlackKey);
+
+            if (whitekey)
+            {
+                kbdColour = skin->getColor(clr::WhiteKey);
+            }
+
+            bool no = false;
+            auto pressedColour = skin->getColor(clr::PressedKey);
+
+            if (parent.notesOn[rowNumber])
+            {
+                no = true;
+                kbdColour = pressedColour;
+            }
+
+            g.fillAll(kbdColour);
+
+            if (!whitekey && columnID != 1)
+            {
+                g.setColour(skin->getColor(clr::Separator));
+                // draw an inset top and bottom
+                g.fillRect(0, 0, width - 1, 1);
+                g.fillRect(0, height - 1, width - 1, 1);
+            }
+
+            int txtOff = 0;
+
+            if (columnID == 1)
+            {
+                // black key
+                if (!whitekey)
                 {
-                    g.setColour(pressedColour);
-                    g.fillRect(0, 0, txtOff, height / 2);
-                }
+                    txtOff = 10;
+                    // "black key"
+                    auto kbdColour = skin->getColor(clr::BlackKey);
+                    auto kbc = skin->getColor(clr::WhiteKey);
 
-                if (rowNumber < 127 && notesOn[rowNumber + 1])
-                {
-                    g.setColour(pressedColour);
-                    g.fillRect(0, height / 2, txtOff, height / 2 + 1);
-                }
+                    g.setColour(kbc);
+                    g.fillRect(-1, 0, txtOff, height + 2);
 
-                g.setColour(skin->getColor(clr::BlackKey));
-                g.fillRect(0, height / 2, txtOff, 1);
+                    // OK so now check neighbors
+                    if (rowNumber > 0 && parent.notesOn[rowNumber - 1])
+                    {
+                        g.setColour(pressedColour);
+                        g.fillRect(0, 0, txtOff, height / 2);
+                    }
 
-                if (no)
-                {
-                    g.fillRect(txtOff, 0, width - 1 - txtOff, 1);
-                    g.fillRect(txtOff, height - 1, width - 1 - txtOff, 1);
-                    g.fillRect(txtOff, 0, 1, height - 1);
+                    if (rowNumber < 127 && parent.notesOn[rowNumber + 1])
+                    {
+                        g.setColour(pressedColour);
+                        g.fillRect(0, height / 2, txtOff, height / 2 + 1);
+                    }
+
+                    g.setColour(skin->getColor(clr::BlackKey));
+                    g.fillRect(0, height / 2, txtOff, 1);
+
+                    if (no)
+                    {
+                        g.fillRect(txtOff, 0, width - 1 - txtOff, 1);
+                        g.fillRect(txtOff, height - 1, width - 1 - txtOff, 1);
+                        g.fillRect(txtOff, 0, 1, height - 1);
+                    }
                 }
+            }
+
+            auto mn = rowNumber;
+            double fr = 0;
+
+            auto storage = parent.storage;
+            const auto &tuning = parent.tuning;
+            if (storage && storage->oddsound_mts_client && storage->oddsound_mts_active_as_client)
+            {
+                fr = MTS_NoteToFrequency(storage->oddsound_mts_client, rowNumber, 0);
+            }
+            else
+            {
+                fr = tuning.frequencyForMidiNote(mn);
+            }
+
+            std::string notenum, notename, display;
+
+            g.setColour(skin->getColor(clr::Separator));
+            g.fillRect(width - 1, 0, 1, height);
+
+            if (noblack)
+            {
+                g.fillRect(0, height - 1, width, 1);
+            }
+
+            g.setColour(skin->getColor(clr::Text));
+
+            if (no)
+            {
+                g.setColour(skin->getColor(clr::PressedKeyText));
+            }
+
+            int margin = 5;
+            auto just_l = juce::Justification::centredLeft;
+            auto just_r = juce::Justification::centredRight;
+
+            switch (columnID)
+            {
+            case 1:
+            {
+                notenum = std::to_string(mn);
+                notename = noteInScale % 12 == 0
+                               ? fmt::format("C{:d}", rowNumber / 12 - parent.mcoff)
+                               : "";
+
+                g.setFont(skin->fontManager->getLatoAtSize(7, juce::Font::bold));
+                g.drawText(notename, 2 + txtOff, 0, width - margin, height, just_l, false);
+                g.setFont(skin->fontManager->getLatoAtSize(7));
+                g.drawText(notenum, 2 + txtOff, 0, width - txtOff - margin, height,
+                           juce::Justification::centredRight, false);
+
+                break;
+            }
+            case 2:
+            {
+                display = fmt::format("{:.2f}", fr);
+                g.setFont(skin->fontManager->getLatoAtSize(8));
+                g.drawText(display, 2 + txtOff, 0, width - margin, height, just_r, false);
+                break;
+            }
             }
         }
 
-        auto mn = rowNumber;
-        double fr = tuning.frequencyForMidiNote(mn);
-
-        std::string notenum, notename, display;
-
-        g.setColour(skin->getColor(clr::Separator));
-        g.fillRect(width - 1, 0, 1, height);
-
-        if (noblack)
+        void mouseDown(const juce::MouseEvent &event) override
         {
-            g.fillRect(0, height - 1, width, 1);
+            parent.parent->editor->playNote(rowNumber, 90);
         }
 
-        g.setColour(skin->getColor(clr::Text));
-
-        if (no)
+        void mouseUp(const juce::MouseEvent &event) override
         {
-            g.setColour(skin->getColor(clr::PressedKeyText));
+            parent.parent->editor->releaseNote(rowNumber, 90);
         }
+    };
 
-        int margin = 5;
-        auto just_l = juce::Justification::centredLeft;
-        auto just_r = juce::Justification::centredRight;
+    juce::Component *refreshComponentForCell(int rowNumber, int columnId, bool isRowSelected,
+                                             juce::Component *existingComponentToUpdate) override
+    {
+        if (existingComponentToUpdate == nullptr)
+            existingComponentToUpdate = new TuningRowComp(*this);
 
-        switch (columnID)
-        {
-        case 1:
-        {
-            notenum = std::to_string(mn);
-            notename = noteInScale % 12 == 0 ? fmt::format("C{:d}", rowNumber / 12 - mcoff) : "";
+        auto trc = static_cast<TuningRowComp *>(existingComponentToUpdate);
 
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(7, juce::Font::bold));
-            g.drawText(notename, 2 + txtOff, 0, width - margin, height, just_l, false);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(7));
-            g.drawText(notenum, 2 + txtOff, 0, width - txtOff - margin, height,
-                       juce::Justification::centredRight, false);
+        trc->rowNumber = rowNumber;
+        trc->columnID = columnId;
 
-            break;
-        }
-        case 2:
-        {
-            display = fmt::format("{:.2f}", fr);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(8));
-            g.drawText(display, 2 + txtOff, 0, width - margin, height, just_r, false);
-            break;
-        }
-        }
+        return existingComponentToUpdate;
     }
 
-    virtual void cellClicked(int rowNumber, int columnId, const juce::MouseEvent &e) override {}
+    void paintCell(juce::Graphics &, int rowNumber, int columnId, int width, int height,
+                   bool rowIsSelected) override
+    {
+    }
 
     virtual void tuningUpdated(const Tunings::Tuning &newTuning)
     {
@@ -231,6 +309,7 @@ class InfiniteKnob : public juce::Component, public Surge::GUI::SkinConsumingCom
         isDragging = true;
         repaint();
     }
+
     virtual void mouseDrag(const juce::MouseEvent &event) override
     {
         int d = -(event.getDistanceFromDragStartX() + event.getDistanceFromDragStartY());
@@ -297,6 +376,7 @@ class InfiniteKnob : public juce::Component, public Surge::GUI::SkinConsumingCom
         angle = 0;
         repaint();
     }
+
     virtual void paint(juce::Graphics &g) override
     {
         if (!skin)
@@ -310,30 +390,45 @@ class InfiniteKnob : public juce::Component, public Surge::GUI::SkinConsumingCom
         float r = b / 2.0;
         float dx = (w - b) / 2.0;
         float dy = (h - b) / 2.0;
+
         g.saveState();
         g.addTransform(juce::AffineTransform::translation(dx, dy));
         g.addTransform(juce::AffineTransform::translation(r, r));
         g.addTransform(
             juce::AffineTransform::rotation(angle / 50.0 * 2.0 * juce::MathConstants<double>::pi));
+
         if (isHovered)
+        {
             g.setColour(skin->getColor(clr::KnobFillHover));
+        }
         else
+        {
             g.setColour(skin->getColor(clr::KnobFill));
+        }
+
         g.fillEllipse(-(r - 3), -(r - 3), (r - 3) * 2, (r - 3) * 2);
         g.setColour(skin->getColor(clr::KnobBorder));
         g.drawEllipse(-(r - 3), -(r - 3), (r - 3) * 2, (r - 3) * 2, r / 5.0);
+
         if (enabled)
         {
             if (isPlaying)
+            {
                 g.setColour(skin->getColor(clr::KnobThumbPlayed));
+            }
             else
+            {
                 g.setColour(skin->getColor(clr::KnobThumb));
+            }
+
             g.drawLine(0, -(r - 1), 0, r - 1, r / 3.0);
         }
+
         g.restoreState();
     }
 
     bool isHovered = false;
+
     void mouseEnter(const juce::MouseEvent &e) override
     {
         isHovered = true;
@@ -362,17 +457,46 @@ class RadialScaleGraph : public juce::Component,
                          public Surge::GUI::IComponentTagValue::Listener
 {
   public:
-    RadialScaleGraph()
+    RadialScaleGraph(SurgeStorage *s) : storage(s)
     {
         toneList = std::make_unique<juce::Viewport>();
         toneInterior = std::make_unique<juce::Component>();
         toneList->setViewedComponent(toneInterior.get(), false);
         addAndMakeVisible(*toneList);
 
+        radialModeKnob = std::make_unique<Surge::Widgets::MultiSwitchSelfDraw>();
+        radialModeKnob->setSkin(skin, associatedBitmapStore);
+        radialModeKnob->setStorage(storage);
+        radialModeKnob->setRows(1);
+        radialModeKnob->setColumns(2);
+        radialModeKnob->setTag(78676);
+        radialModeKnob->setLabels({"Radial", "Angular"});
+        radialModeKnob->addListener(this);
+        addAndMakeVisible(*radialModeKnob);
+
         setTuning(Tunings::Tuning(Tunings::evenTemperament12NoteScale(), Tunings::tuneA69To(440)));
     }
 
     SurgeStorage *storage{nullptr};
+    void setStorage(SurgeStorage *s)
+    {
+        storage = s;
+        if (storage)
+        {
+            displayMode = (DisplayMode)Surge::Storage::getUserDefaultValue(
+                storage, Surge::Storage::DefaultKey::TuningPolarGraphMode, 1);
+            switch (displayMode)
+            {
+            case DisplayMode::RADIAL:
+                radialModeKnob->setValue(0.f);
+                break;
+            case DisplayMode::ANGULAR:
+                radialModeKnob->setValue(1.f);
+                break;
+            }
+        }
+        repaint();
+    }
 
     void setTuning(const Tunings::Tuning &t)
     {
@@ -398,9 +522,12 @@ class RadialScaleGraph : public juce::Component,
                 auto totalR = juce::Rectangle<int>(m, i * (h + m) + m, w - 2 * m, h);
 
                 auto tl = std::make_unique<juce::Label>("tone index");
+                if (skin)
+                {
+                    tl->setFont(skin->fontManager->getLatoAtSize(9));
+                }
                 tl->setText(std::to_string(i), juce::NotificationType::dontSendNotification);
                 tl->setBounds(totalR.withWidth(labw));
-                tl->setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
                 tl->setJustificationType(juce::Justification::centredRight);
                 toneInterior->addAndMakeVisible(*tl);
                 toneLabels.push_back(std::move(tl));
@@ -426,29 +553,35 @@ class RadialScaleGraph : public juce::Component,
                     toneInterior->addAndMakeVisible(*tk);
                     toneKnobs.push_back(std::move(tk));
 
-                    showHideKnob = std::make_unique<Surge::Widgets::MultiSwitchSelfDraw>();
-                    showHideKnob->setSkin(skin, associatedBitmapStore);
-                    showHideKnob->setRows(1);
-                    showHideKnob->setColumns(1);
-                    showHideKnob->setTag(12345);
-                    showHideKnob->setLabels({"Hide"});
-                    showHideKnob->addListener(this);
+                    hideBtn = std::make_unique<Surge::Widgets::MultiSwitchSelfDraw>();
+                    hideBtn->setSkin(skin, associatedBitmapStore);
+                    hideBtn->setStorage(storage);
+                    hideBtn->setRows(1);
+                    hideBtn->setColumns(1);
+                    hideBtn->setTag(12345);
+                    hideBtn->setLabels({"Hide"});
+                    hideBtn->addListener(this);
 
-                    showHideKnob->setBounds(
+                    hideBtn->setBounds(
                         totalR.withTrimmedLeft(labw + m).withTrimmedRight(h + m).reduced(3));
 
-                    toneInterior->addAndMakeVisible(*showHideKnob);
+                    toneInterior->addAndMakeVisible(*hideBtn);
                 }
                 else
                 {
                     auto te = std::make_unique<juce::TextEditor>("tone");
                     te->setBounds(totalR.withTrimmedLeft(labw + m).withTrimmedRight(h + m));
-                    te->setFont(Surge::GUI::getFontManager()->getFiraMonoAtSize(9));
                     te->setJustification((juce::Justification::verticallyCentred));
+                    if (skin)
+                    {
+                        te->setFont(skin->fontManager->getFiraMonoAtSize(9));
+                    }
                     te->setIndents(4, (te->getHeight() - te->getTextHeight()) / 2);
                     te->setText(std::to_string(i), juce::NotificationType::dontSendNotification);
                     te->setEnabled(i != 0);
                     te->addListener(this);
+                    te->setSelectAllWhenFocused(true);
+
                     te->onEscapeKey = [this]() { giveAwayKeyboardFocus(); };
                     toneInterior->addAndMakeVisible(*te);
                     toneEditors.push_back(std::move(te));
@@ -501,7 +634,7 @@ class RadialScaleGraph : public juce::Component,
 
         if (selfEditGuard == 0)
         {
-            // Someone dragged something onto me or somehing. Reset the tuning knobs
+            // Someone dragged something onto me or something. Reset the tuning knobs
             for (const auto &tk : toneKnobs)
             {
                 tk->angle = 0;
@@ -511,30 +644,77 @@ class RadialScaleGraph : public juce::Component,
     }
 
     bool centsShowing{true};
+
+    enum struct DisplayMode
+    {
+        RADIAL,
+        ANGULAR
+    } displayMode{DisplayMode::RADIAL};
+
     void valueChanged(GUI::IComponentTagValue *p) override
     {
-        if (p == showHideKnob.get())
+        if (p == hideBtn.get())
         {
             centsShowing = !centsShowing;
             for (const auto &t : toneEditors)
             {
                 t->setPasswordCharacter(centsShowing ? 0 : 0x2022);
             }
-            showHideKnob->setLabels({centsShowing ? "Hide" : "Show"});
+            hideBtn->setLabels({centsShowing ? "Hide" : "Show"});
+        }
+        if (p == radialModeKnob.get())
+        {
+            if (p->getValue() > 0.5)
+            {
+                displayMode = DisplayMode::ANGULAR;
+            }
+            else
+            {
+                displayMode = DisplayMode::RADIAL;
+            }
+            if (storage)
+            {
+                Surge::Storage::updateUserDefaultValue(
+                    storage, Surge::Storage::TuningPolarGraphMode, (int)displayMode);
+            }
         }
         repaint();
     }
+
     void onSkinChanged() override
     {
-        if (showHideKnob)
-            showHideKnob->setSkin(skin, associatedBitmapStore);
+        if (hideBtn)
+        {
+            hideBtn->setSkin(skin, associatedBitmapStore);
+        }
+
         for (const auto &k : toneKnobs)
+        {
             k->setSkin(skin, associatedBitmapStore);
+        }
+
+        for (const auto &tl : toneLabels)
+        {
+            tl->setFont(skin->fontManager->getLatoAtSize(9));
+        }
+
+        for (const auto &te : toneEditors)
+        {
+            te->setFont(skin->fontManager->getFiraMonoAtSize(9));
+            // Work around a juce feature that replacing a font only works on new text
+            auto gt = te->getText();
+            te->setText("val", juce::dontSendNotification);
+            te->setText(gt, juce::dontSendNotification);
+        }
+
+        radialModeKnob->setSkin(skin, associatedBitmapStore);
         setNotesOn(bitset);
+        repaint();
     }
 
   private:
     void textEditorReturnKeyPressed(juce::TextEditor &editor) override;
+    void textEditorFocusLost(juce::TextEditor &editor) override;
 
   public:
     virtual void paint(juce::Graphics &g) override;
@@ -552,16 +732,21 @@ class RadialScaleGraph : public juce::Component,
         [](int, const std::string &) {};
     std::function<void(double)> onScaleRescaled = [](double) {};
     std::function<void(double)> onScaleRescaledAbsolute = [](double) {};
-    static constexpr int usedForSidebar = 160;
+    static constexpr int usedForSidebar = 185;
 
     std::unique_ptr<juce::Viewport> toneList;
     std::unique_ptr<juce::Component> toneInterior;
     std::vector<std::unique_ptr<juce::TextEditor>> toneEditors;
     std::vector<std::unique_ptr<juce::Label>> toneLabels;
     std::vector<std::unique_ptr<InfiniteKnob>> toneKnobs;
-    std::unique_ptr<Surge::Widgets::MultiSwitchSelfDraw> showHideKnob;
+    std::unique_ptr<Surge::Widgets::MultiSwitchSelfDraw> hideBtn, radialModeKnob;
 
-    void resized() override { toneList->setBounds(0, 0, usedForSidebar, getHeight()); }
+    void resized() override
+    {
+        auto rmh = 14;
+        toneList->setBounds(0, 0, usedForSidebar, getHeight() - rmh - 4);
+        radialModeKnob->setBounds(0, getHeight() - rmh - 2, usedForSidebar - 20, rmh);
+    }
 
     std::vector<bool> notesOn;
     std::bitset<128> bitset{0};
@@ -569,8 +754,11 @@ class RadialScaleGraph : public juce::Component,
     {
         namespace clr = Colors::TuningOverlay::RadialGraph;
         bitset = bs;
+
         for (int i = 0; i < scale.count; ++i)
+        {
             notesOn[i] = false;
+        }
 
         for (int i = 0; i < 128; ++i)
         {
@@ -581,11 +769,15 @@ class RadialScaleGraph : public juce::Component,
         }
 
         if (!skin)
+        {
             return;
+        }
+
         for (auto &a : toneKnobs)
         {
             a->isPlaying = false;
         }
+
         for (int i = 0; i < scale.count; ++i)
         {
             auto ni = (i + 1) % (scale.count);
@@ -645,6 +837,7 @@ class RadialScaleGraph : public juce::Component,
 
     int whichSideOfZero = 0;
 
+    juce::Point<float> lastDragPoint;
     void mouseMove(const juce::MouseEvent &e) override;
     void mouseDown(const juce::MouseEvent &e) override;
     void mouseDrag(const juce::MouseEvent &e) override;
@@ -661,11 +854,16 @@ void RadialScaleGraph::paint(juce::Graphics &g)
     {
         notesOn.clear();
         notesOn.resize(scale.count);
+
         for (int i = 0; i < scale.count; ++i)
+        {
             notesOn[i] = 0;
+        }
     }
+
     g.fillAll(skin->getColor(clr::Background));
-    int w = getWidth() - usedForSidebar;
+
+    int w = getWidth() - usedForSidebar - 25;
     int h = getHeight();
     float r = std::min(w, h) / 2.1;
     float xo = (w - 2 * r) / 2.0;
@@ -684,129 +882,217 @@ void RadialScaleGraph::paint(juce::Graphics &g)
 
     g.addTransform(screenTransform);
 
-    // We are now in a normal x y 0 1 coordinate system with 0,0 at the center. Cool
+    // We are now in a normal x y 0 1 coordinate system with 0, 0 at the center. Cool
 
     // So first things first - scan for range.
     double ETInterval = scale.tones.back().cents / scale.count;
     double dIntMin = 0, dIntMax = 0;
+    double intMin = std::numeric_limits<double>::max(), intMax = std::numeric_limits<double>::min();
     double pCents = 0;
     std::vector<float> intervals; // between tone i and i-1
+
     for (int i = 0; i < scale.count; ++i)
     {
         auto t = scale.tones[i];
         auto c = t.cents;
         auto in = c - pCents;
+
+        intMin = std::min(intMin, in);
+        intMax = std::max(intMax, in);
         pCents = c;
         intervals.push_back(in);
 
         auto intervalDistance = (c - ETInterval * (i + 1)) / ETInterval;
+
         dIntMax = std::max(intervalDistance, dIntMax);
         dIntMin = std::min(intervalDistance, dIntMin);
     }
+
+    // intmin < 0 flash warning in angular
     double range = std::max(0.01, std::max(dIntMax, -dIntMin / 2.0)); // twice as many inside rings
     int iRange = std::ceil(range);
 
     dInterval = outerRadiusExtension / iRange;
+
     double nup = iRange;
     double ndn = (int)(iRange * 1.6);
 
     // Now draw the interval circles
-    for (int i = -ndn; i <= nup; ++i)
+    if (displayMode == DisplayMode::RADIAL)
     {
-        if (i == 0)
+        for (int i = -ndn; i <= nup; ++i)
         {
-        }
-        else
-        {
-            float pos = 1.0 * std::abs(i) / ndn;
-            float cpos = std::max(0.f, pos);
-
-            g.setColour(juce::Colour(110, 110, 120)
-                            .interpolatedWith(getLookAndFeel().findColour(
-                                                  juce::ResizableWindow::backgroundColourId),
-                                              cpos * 0.8));
-
-            float rad = 1.0 + dInterval * i;
-            g.drawEllipse(-rad, -rad, 2 * rad, 2 * rad, 0.01);
-        }
-    }
-
-    for (int i = 0; i < scale.count; ++i)
-    {
-        double frac = 1.0 * i / (scale.count);
-        double hfrac = 0.5 / scale.count;
-        double sx = std::sin(frac * 2.0 * juce::MathConstants<double>::pi);
-        double cx = std::cos(frac * 2.0 * juce::MathConstants<double>::pi);
-
-        if (notesOn[i])
-            g.setColour(juce::Colour(255, 255, 255));
-        else
-            g.setColour(juce::Colour(110, 110, 120));
-        g.drawLine(0, 0, (1.0 + outerRadiusExtension) * sx, (1.0 + outerRadiusExtension) * cx,
-                   0.01);
-
-        if (centsShowing)
-        {
-            if (scale.count > 48)
+            if (i == 0)
             {
-                // we just don't have room to draw the intervals
-            }
-            if (scale.count > 18)
-            {
-                // draw them sideways
-                juce::Graphics::ScopedSaveState gs(g);
-                auto t =
-                    juce::AffineTransform()
-                        .scaled(-0.7, 0.7)
-                        .rotated(juce::MathConstants<double>::pi)
-                        .translated(1.05, 0.0)
-                        .rotated((-frac + 0.25 - hfrac) * 2.0 * juce::MathConstants<double>::pi);
-
-                g.addTransform(t);
-                g.setColour(juce::Colours::white);
-                g.setFont(0.1);
-                auto msg = fmt::format("{:.2f}", intervals[i]);
-                auto tr = juce::Rectangle<float>(0.f, -0.1f, 0.6f, 0.2f);
-                g.setColour(juce::Colours::white);
-                g.drawText(msg, tr, juce::Justification::centredLeft);
             }
             else
             {
-                juce::Graphics::ScopedSaveState gs(g);
-                auto t =
-                    juce::AffineTransform()
-                        .scaled(-0.7, 0.7)
-                        .rotated(juce::MathConstants<double>::pi / 2)
-                        .translated(1.05, 0.0)
-                        .rotated((-frac + 0.25 - hfrac) * 2.0 * juce::MathConstants<double>::pi);
+                float pos = 1.0 * std::abs(i) / ndn;
+                float cpos = std::max(0.f, pos);
 
-                g.addTransform(t);
-                g.setColour(juce::Colours::white);
-                g.setFont(0.1);
-                auto msg = fmt::format("{:.2f}", intervals[i]);
-                auto tr = juce::Rectangle<float>(-0.3f, -0.2f, 0.6f, 0.2f);
-                g.setColour(juce::Colours::white);
-                g.drawText(msg, tr, juce::Justification::centred);
+                g.setColour(juce::Colour(110, 110, 120)
+                                .interpolatedWith(getLookAndFeel().findColour(
+                                                      juce::ResizableWindow::backgroundColourId),
+                                                  cpos * 0.8));
+
+                float rad = 1.0 + dInterval * i;
+
+                g.drawEllipse(-rad, -rad, 2 * rad, 2 * rad, 0.01);
             }
         }
 
-        g.saveState();
-        g.addTransform(juce::AffineTransform::rotation((-frac + 0.25) * 2.0 *
-                                                       juce::MathConstants<double>::pi));
-        g.addTransform(juce::AffineTransform::translation(1.0 + outerRadiusExtension, 0.0));
-        g.addTransform(juce::AffineTransform::rotation(juce::MathConstants<double>::pi * 0.5));
-        g.addTransform(juce::AffineTransform::scale(-1.0, 1.0));
+        for (int i = 0; i < scale.count; ++i)
+        {
+            double frac = 1.0 * i / (scale.count);
+            double hfrac = 0.5 / scale.count;
+            double sx = std::sin(frac * 2.0 * juce::MathConstants<double>::pi);
+            double cx = std::cos(frac * 2.0 * juce::MathConstants<double>::pi);
 
-        if (notesOn[i])
-            g.setColour(juce::Colour(255, 255, 255));
-        else
-            g.setColour(juce::Colour(200, 200, 240));
-        juce::Rectangle<float> textPos(0, -0.1, 0.1, 0.1);
-        g.setFont(0.1);
-        g.drawText(juce::String(i), textPos, juce::Justification::centred, 1);
-        g.restoreState();
+            if (notesOn[i])
+            {
+                g.setColour(juce::Colour(255, 255, 255));
+            }
+            else
+            {
+                g.setColour(juce::Colour(110, 110, 120));
+            }
+
+            g.drawLine(0, 0, (1.0 + outerRadiusExtension) * sx, (1.0 + outerRadiusExtension) * cx,
+                       0.01);
+
+            if (centsShowing)
+            {
+                if (scale.count > 48)
+                {
+                    // we just don't have room to draw the intervals
+                }
+                auto rsf = 0.01;
+                auto irsf = 1.0 / rsf;
+
+                if (scale.count > 18)
+                {
+                    // draw them sideways
+                    juce::Graphics::ScopedSaveState gs(g);
+                    auto t = juce::AffineTransform()
+                                 .scaled(-0.7, 0.7)
+                                 .scaled(rsf, rsf)
+                                 .rotated(juce::MathConstants<double>::pi)
+                                 .translated(1.05, 0.0)
+                                 .rotated((-frac + 0.25 - hfrac) * 2.0 *
+                                          juce::MathConstants<double>::pi);
+
+                    g.addTransform(t);
+                    g.setColour(juce::Colours::white);
+                    g.setFont(skin->fontManager->getLatoAtSize(0.1 * irsf));
+
+                    auto msg = fmt::format("{:.2f}", intervals[i]);
+                    auto tr =
+                        juce::Rectangle<float>(0.f * irsf, -0.1f * irsf, 0.6f * irsf, 0.2f * irsf);
+
+                    auto al = juce::Justification::centredLeft;
+                    if (frac + hfrac > 0.5)
+                    {
+                        // left side rotated flip
+                        g.addTransform(juce::AffineTransform()
+                                           .rotated(juce::MathConstants<double>::pi)
+                                           .translated(tr.getWidth(), 0));
+                        al = juce::Justification::centredRight;
+                    }
+                    g.setColour(juce::Colours::white);
+                    g.drawText(msg, tr, al);
+
+                    // g.setColour(juce::Colours::red);
+                    // g.drawRect(tr, 0.01 * irsf);
+                    // g.setColour(juce::Colours::white);
+                }
+                else
+                {
+                    juce::Graphics::ScopedSaveState gs(g);
+
+                    auto t = juce::AffineTransform()
+                                 .scaled(-0.7, 0.7)
+                                 .scaled(rsf, rsf)
+                                 .rotated(juce::MathConstants<double>::pi / 2)
+                                 .translated(1.05, 0.0)
+                                 .rotated((-frac + 0.25 - hfrac) * 2.0 *
+                                          juce::MathConstants<double>::pi);
+
+                    g.addTransform(t);
+                    g.setColour(juce::Colours::white);
+                    g.setFont(skin->fontManager->getLatoAtSize(0.1 * irsf));
+
+                    auto msg = fmt::format("{:.2f}", intervals[i]);
+                    auto tr = juce::Rectangle<float>(-0.3f * irsf, -0.2f * irsf, 0.6f * irsf,
+                                                     0.2f * irsf);
+
+                    if (frac + hfrac >= 0.25 && frac + hfrac <= 0.75)
+                    {
+                        // underneath rotated flip
+                        g.addTransform(juce::AffineTransform()
+                                           .rotated(juce::MathConstants<double>::pi)
+                                           .translated(0, -tr.getHeight()));
+                    }
+
+                    g.setColour(juce::Colours::white);
+                    g.drawText(msg, tr, juce::Justification::centred);
+
+                    // Useful to debug text layout
+                    // g.setColour(juce::Colours::red);
+                    // g.drawRect(tr, 0.01 * irsf);
+                    // g.setColour(juce::Colours::white);
+                }
+            }
+
+            g.saveState();
+            auto rsf = 0.01;
+            auto irsf = 1.0 / rsf;
+
+            g.addTransform(juce::AffineTransform::rotation((-frac + 0.25) * 2.0 *
+                                                           juce::MathConstants<double>::pi));
+            g.addTransform(juce::AffineTransform::translation(1.0 + outerRadiusExtension, 0.0));
+            g.addTransform(juce::AffineTransform::rotation(juce::MathConstants<double>::pi * 0.5));
+            g.addTransform(juce::AffineTransform::scale(-1.0, 1.0));
+            g.addTransform(juce::AffineTransform::scale(rsf, rsf));
+
+            if (notesOn[i])
+            {
+                g.setColour(juce::Colour(255, 255, 255));
+            }
+            else
+            {
+                g.setColour(juce::Colour(200, 200, 240));
+            }
+
+            // tone labels
+            juce::Rectangle<float> textPos(-0.05 * irsf, -0.115 * irsf, 0.1 * irsf, 0.1 * irsf);
+            g.setFont(skin->fontManager->getLatoAtSize(0.075 * irsf));
+            g.drawText(juce::String(i), textPos, juce::Justification::centred, 1);
+
+            // PLease leave - useful for debugging bounding boxes
+            // g.setColour(juce::Colours::red);
+            // g.drawRect(textPos, 0.01 * irsf);
+            // g.drawLine(textPos.getCentreX(), textPos.getY(),
+            //           textPos.getCentreX(), textPos.getY() + textPos.getHeight(),
+            //           0.01 * irsf);
+
+            g.restoreState();
+        }
     }
+    else
+    {
+        for (int i = 0; i < scale.count; ++i)
+        {
+            double frac = 1.0 * i / (scale.count);
+            double hfrac = 0.5 / scale.count;
+            double sx = std::sin(frac * 2.0 * juce::MathConstants<double>::pi);
+            double cx = std::cos(frac * 2.0 * juce::MathConstants<double>::pi);
 
+            g.setColour(juce::Colour(90, 90, 100));
+
+            float dash[2]{0.03f, 0.02f};
+            g.drawDashedLine({0.f, 0.f, (float)sx, (float)cx}, dash, 2, 0.003);
+        }
+    }
     // Draw the ring at 1.0
     g.setColour(juce::Colour(255, 255, 255));
     g.drawEllipse(-1, -1, 2, 2, 0.01);
@@ -814,101 +1100,326 @@ void RadialScaleGraph::paint(juce::Graphics &g)
     // Then draw ellipses for each note
     screenHotSpots.clear();
 
-    for (int i = 1; i <= scale.count; ++i)
+    if (displayMode == DisplayMode::RADIAL)
     {
-        double frac = 1.0 * i / (scale.count);
-        double sx = std::sin(frac * 2.0 * juce::MathConstants<double>::pi);
-        double cx = std::cos(frac * 2.0 * juce::MathConstants<double>::pi);
-
-        auto t = scale.tones[i - 1];
-        auto c = t.cents;
-        auto expectedC = scale.tones.back().cents / scale.count;
-
-        auto rx = 1.0 + dInterval * (c - expectedC * i) / expectedC;
-
-        float dx = 0.1, dy = 0.1;
-
-        if (i == scale.count)
+        for (int i = 1; i <= scale.count; ++i)
         {
-            dx = 0.15;
-            dy = 0.15;
-        }
+            double frac = 1.0 * i / (scale.count);
+            double sx = std::sin(frac * 2.0 * juce::MathConstants<double>::pi);
+            double cx = std::cos(frac * 2.0 * juce::MathConstants<double>::pi);
 
-        float x0 = rx * sx - 0.5 * dx, y0 = rx * cx - 0.5 * dy;
+            auto t = scale.tones[i - 1];
+            auto c = t.cents;
+            auto expectedC = scale.tones.back().cents / scale.count;
 
-        if (notesOn[i])
-        {
-            g.setColour(juce::Colour(255, 255, 255));
-            g.drawLine(sx, cx, rx * sx, rx * cx, 0.03);
-        }
+            auto rx = 1.0 + dInterval * (c - expectedC * i) / expectedC;
+            float dx = 0.1, dy = 0.1;
 
-        juce::Colour drawColour(200, 200, 200);
+            if (i == scale.count)
+            {
+                dx = 0.15;
+                dy = 0.15;
+            }
 
-        // FIXME - this colormap is bad
-        if (rx < 0.99)
-        {
-            // use a blue here
-            drawColour = juce::Colour(200 * (1.0 - 0.6 * rx), 200 * (1.0 - 0.6 * rx), 200);
-        }
-        else if (rx > 1.01)
-        {
-            // Use a yellow here
-            drawColour = juce::Colour(200, 200, 200 * (rx - 1.0));
-        }
+            float x0 = rx * sx - 0.5 * dx, y0 = rx * cx - 0.5 * dy;
 
-        auto originalDrawColor = drawColour;
-        if (hotSpotIndex == i - 1)
-            drawColour = drawColour.brighter(0.6);
+            juce::Colour drawColour(200, 200, 200);
 
-        if (i == scale.count)
-        {
-            g.setColour(drawColour);
-            g.drawLine(sx, cx, rx * sx, rx * cx, 0.01);
-            g.fillEllipse(x0, y0, dx, dy);
+            // FIXME - this colormap is bad
+            if (rx < 0.99)
+            {
+                // use a blue here
+                drawColour = juce::Colour(200 * (1.0 - 0.6 * rx), 200 * (1.0 - 0.6 * rx), 200);
+            }
+            else if (rx > 1.01)
+            {
+                // Use a yellow here
+                drawColour = juce::Colour(200, 200, 200 * (rx - 1.0));
+            }
+
+            auto originalDrawColor = drawColour;
 
             if (hotSpotIndex == i - 1)
             {
-                auto p = juce::Path();
-                if (whichSideOfZero < 0)
+                drawColour = drawColour.brighter(0.6);
+            }
+
+            if (i == scale.count)
+            {
+                g.setColour(drawColour);
+                g.fillEllipse(x0, y0, dx, dy);
+
+                if (hotSpotIndex == i - 1)
                 {
-                    p.addArc(x0, y0, dx, dy, juce::MathConstants<float>::pi,
-                             juce::MathConstants<float>::twoPi);
+                    auto p = juce::Path();
+                    if (whichSideOfZero < 0)
+                    {
+                        p.addArc(x0, y0, dx, dy, juce::MathConstants<float>::pi,
+                                 juce::MathConstants<float>::twoPi);
+                    }
+                    else
+                    {
+                        p.addArc(x0, y0, dx, dy, 0, juce::MathConstants<float>::pi);
+                    }
+                    g.setColour(juce::Colour(200, 200, 100));
+                    g.fillPath(p);
+                }
+            }
+            else
+            {
+                g.setColour(drawColour);
+
+                g.fillEllipse(x0, y0, dx, dy);
+
+                if (hotSpotIndex != i - 1)
+                {
+                    g.setColour(drawColour.brighter(0.6));
+                    g.drawEllipse(x0, y0, dx, dy, 0.01);
+                }
+            }
+
+            if (notesOn[i % scale.count])
+            {
+                g.setColour(juce::Colour(255, 255, 255));
+                g.drawEllipse(x0, y0, dx, dy, 0.02);
+            }
+
+            dx += x0;
+            dy += y0;
+            screenTransform.transformPoint(x0, y0);
+            screenTransform.transformPoint(dx, dy);
+            screenHotSpots.push_back(juce::Rectangle<float>(x0, dy, dx - x0, y0 - dy));
+        }
+    }
+    else
+    {
+        g.setColour(juce::Colour(110, 110, 120).interpolatedWith(juce::Colours::black, 0.2));
+        auto oor = outerRadiusExtension;
+        outerRadiusExtension = oor; //* 0.95;
+        g.drawEllipse(-1 - outerRadiusExtension, -1 - outerRadiusExtension,
+                      2 + 2 * outerRadiusExtension, 2 + 2 * outerRadiusExtension, 0.005);
+
+        g.setColour(juce::Colour(255, 255, 255));
+        auto ps = 0.f;
+        for (int i = 1; i <= scale.count; ++i)
+        {
+            auto dAngle = intervals[i - 1] / scale.tones.back().cents;
+            auto dAnglePlus = intervals[i % scale.count] / scale.tones.back().cents;
+
+            auto ca = ps + dAngle / 2;
+
+            {
+                juce::Graphics::ScopedSaveState gs(g);
+
+                auto rot = fabs(dAngle) < 1.0 / 22.0;
+
+                auto rsf = 0.01;
+                auto irsf = 1.0 / rsf;
+                auto t = juce::AffineTransform()
+                             .scaled(-0.7, 0.7)
+                             .scaled(rsf, rsf)
+                             .rotated(juce::MathConstants<double>::pi * (rot ? -1.0 : 0.5))
+                             .translated(1.05, 0)
+                             .rotated((-ca + 0.25) * 2.0 * juce::MathConstants<double>::pi);
+
+                g.addTransform(t);
+                g.setColour(juce::Colours::white);
+                auto fs = 0.1 * irsf;
+                auto pushFac = 1.0;
+                if (fabs(dAngle) < 0.02)
+                {
+                    pushFac = 1.03;
+                    fs *= 0.75;
+                }
+                if (fabs(dAngle) < 0.012)
+                {
+                    pushFac = 1.07;
+                    fs *= 0.8;
+                }
+                // and that's as far as we go
+                g.setFont(skin->fontManager->getLatoAtSize(fs));
+
+                auto msg = fmt::format("{:.2f}", intervals[i - 1]);
+                auto tr =
+                    juce::Rectangle<float>(-0.3f * irsf, -0.2f * irsf, 0.6f * irsf, 0.2f * irsf);
+                if (rot)
+                    tr = juce::Rectangle<float>(0.02f * irsf, -0.1f * irsf, 0.6f * irsf,
+                                                0.2f * irsf);
+
+                auto al = rot ? juce::Justification::centredLeft : juce::Justification::centred;
+                if (rot && ca > 0.5)
+                {
+                    // left side rotated flip
+                    g.addTransform(juce::AffineTransform()
+                                       .rotated(juce::MathConstants<double>::pi)
+                                       .translated(tr.getWidth() * pushFac, 0));
+                    al = juce::Justification::centredRight;
+                }
+                if (!rot && ca > 0.25 && ca < 0.75)
+                {
+                    // underneat rotated flip
+                    g.addTransform(juce::AffineTransform()
+                                       .rotated(juce::MathConstants<double>::pi)
+                                       .translated(0, -tr.getHeight()));
+                }
+                g.setColour(juce::Colours::white);
+                if (centsShowing)
+                    g.drawText(msg, tr, al);
+                // Useful to debug text layout
+                // g.setColour(rot ? juce::Colours::blue  : juce::Colours::red);
+                // g.drawRect(tr, 0.01 * irsf);
+                // g.setColour(juce::Colours::white);
+            }
+
+            ps += dAngle;
+
+            {
+                juce::Graphics::ScopedSaveState gs(g);
+                g.addTransform(juce::AffineTransform::rotation((-ps + 0.25) * 2.0 *
+                                                               juce::MathConstants<double>::pi));
+                g.addTransform(juce::AffineTransform::translation(1.0 + oor, 0.0));
+                auto angthresh = 0.013; // inside this rotate
+                if ((fabs(dAngle) > angthresh && fabs(dAnglePlus) > angthresh) || (i < 10))
+                {
+                    g.addTransform(
+                        juce::AffineTransform::rotation(juce::MathConstants<double>::pi * 0.5));
                 }
                 else
                 {
-                    p.addArc(x0, y0, dx, dy, 0, juce::MathConstants<float>::pi);
+                    g.addTransform(juce::AffineTransform::translation(0.05, 0.0));
+                    if (ps < 0.5)
+                    {
+                        g.addTransform(
+                            juce::AffineTransform::rotation(juce::MathConstants<double>::pi));
+                    }
                 }
-                g.setColour(juce::Colour(200, 200, 100));
-                g.fillPath(p);
+                g.addTransform(juce::AffineTransform::scale(-1.0, 1.0));
+
+                auto rsf = 0.01;
+                auto irsf = 1.0 / rsf;
+                g.addTransform(juce::AffineTransform::scale(rsf, rsf));
+
+                if (notesOn[i])
+                {
+                    g.setColour(juce::Colour(255, 255, 255));
+                }
+                else
+                {
+                    g.setColour(juce::Colour(200, 200, 240));
+                }
+
+                // tone labels
+                juce::Rectangle<float> textPos(-0.05 * irsf, -0.115 * irsf, 0.1 * irsf, 0.1 * irsf);
+                auto fs = 0.075 * irsf;
+                g.setFont(skin->fontManager->getLatoAtSize(fs));
+                g.drawText(juce::String((i == scale.count ? 0 : i)), textPos,
+                           juce::Justification::centred, 1);
+
+                // Please leave -useful for debugginb  bounding boxes
+                // g.setColour(juce::Colours::red);
+                // g.drawRect(textPos, 0.01 * irsf);
+                // g.drawLine(textPos.getCentreX(), textPos.getY(),
+                //           textPos.getCentreX(), textPos.getY() + textPos.getHeight(),
+                //           0.01 * irsf);
             }
-        }
-        else
-        {
-            g.setColour(drawColour);
 
-            g.drawLine(sx, cx, rx * sx, rx * cx, 0.01);
-            g.fillEllipse(x0, y0, dx, dy);
+            double sx = std::sin(ps * 2.0 * juce::MathConstants<double>::pi);
+            double cx = std::cos(ps * 2.0 * juce::MathConstants<double>::pi);
 
-            if (hotSpotIndex != i - 1)
+            g.setColour(juce::Colour(110, 110, 120));
+            g.drawLine(0, 0, (1.0 + outerRadiusExtension) * sx, (1.0 + outerRadiusExtension) * cx,
+                       0.01);
+            if (notesOn[i % scale.count])
             {
-                g.setColour(drawColour.brighter(0.6));
-                g.drawEllipse(x0, y0, dx, dy, 0.01);
+                g.setColour(juce::Colour(255, 255, 255));
+                g.drawLine(0, 0, sx, cx, 0.02);
             }
-        }
 
-        if (notesOn[i % scale.count])
-        {
-            g.setColour(juce::Colour(255, 255, 255));
-            g.drawEllipse(x0, y0, dx, dy, 0.02);
-        }
+            auto t = scale.tones[i - 1];
+            auto c = t.cents;
+            auto expectedC = scale.tones.back().cents / scale.count;
 
-        dx += x0;
-        dy += y0;
-        screenTransform.transformPoint(x0, y0);
-        screenTransform.transformPoint(dx, dy);
-        screenHotSpots.push_back(juce::Rectangle<float>(x0, dy, dx - x0, y0 - dy));
+            auto rx = 1.0 + dInterval * (c - expectedC * i) / expectedC;
+
+            float dx = 0.1, dy = 0.1;
+
+            if (i == scale.count)
+            {
+                dx = 0.15;
+                dy = 0.15;
+            }
+
+            auto drx = 1.0;
+            float x0 = drx * sx - 0.5 * dx, y0 = drx * cx - 0.5 * dy;
+
+            juce::Colour drawColour(200, 200, 200);
+
+            // FIXME - this colormap is bad
+            if (rx < 0.99)
+            {
+                // use a blue here
+                drawColour = juce::Colour(200 * (1.0 - 0.6 * rx), 200 * (1.0 - 0.6 * rx), 200);
+            }
+            else if (rx > 1.01)
+            {
+                // Use a yellow here
+                drawColour = juce::Colour(200, 200, 200 * (rx - 1.0));
+            }
+
+            auto originalDrawColor = drawColour;
+
+            if (hotSpotIndex == i - 1)
+            {
+                drawColour = drawColour.brighter(0.6);
+            }
+
+            if (i == scale.count)
+            {
+                g.setColour(drawColour);
+                g.fillEllipse(x0, y0, dx, dy);
+
+                if (hotSpotIndex == i - 1)
+                {
+                    auto p = juce::Path();
+                    if (whichSideOfZero < 0)
+                    {
+                        p.addArc(x0, y0, dx, dy, juce::MathConstants<float>::pi,
+                                 juce::MathConstants<float>::twoPi);
+                    }
+                    else
+                    {
+                        p.addArc(x0, y0, dx, dy, 0, juce::MathConstants<float>::pi);
+                    }
+                    g.setColour(juce::Colour(200, 200, 100));
+                    g.fillPath(p);
+                }
+            }
+            else
+            {
+                g.setColour(drawColour);
+
+                g.fillEllipse(x0, y0, dx, dy);
+
+                if (hotSpotIndex != i - 1)
+                {
+                    g.setColour(drawColour.brighter(0.6));
+                    g.drawEllipse(x0, y0, dx, dy, 0.01);
+                }
+            }
+
+            if (notesOn[i % scale.count])
+            {
+                g.setColour(juce::Colour(255, 255, 255));
+                g.drawEllipse(x0, y0, dx, dy, 0.02);
+            }
+
+            dx += x0;
+            dy += y0;
+            screenTransform.transformPoint(x0, y0);
+            screenTransform.transformPoint(dx, dy);
+            screenHotSpots.push_back(juce::Rectangle<float>(x0, dy, dx - x0, y0 - dy));
+        }
     }
-
     g.restoreState();
 }
 
@@ -921,11 +1432,9 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
         viewport->setViewedComponent(intervalPainter.get(), false);
 
         whatLabel = std::make_unique<juce::Label>("Interval");
-        whatLabel->setFont(Surge::GUI::getFontManager()->getLatoAtSize(12, juce::Font::bold));
         addAndMakeVisible(*whatLabel);
 
         explLabel = std::make_unique<juce::Label>("Interval");
-        explLabel->setFont(Surge::GUI::getFontManager()->getLatoAtSize(8));
         explLabel->setJustificationType(juce::Justification::centredRight);
         addAndMakeVisible(*explLabel);
 
@@ -943,6 +1452,18 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
                            juce::NotificationType::dontSendNotification);
         intervalPainter->mode = IntervalMatrix::IntervalPainter::ROTATION;
 
+        intervalPainter->setSizeFromTuning();
+        repaint();
+    }
+
+    void setTrueKeyboardMode()
+    {
+        whatLabel->setText("True Keyboard Display", juce::NotificationType::dontSendNotification);
+        explLabel->setText("Show intervals between any played keys in realtime",
+                           juce::NotificationType::dontSendNotification);
+        intervalPainter->mode = IntervalMatrix::IntervalPainter::TRUE_KEYS;
+
+        intervalPainter->setSizeFromTuning();
         repaint();
     }
 
@@ -953,6 +1474,8 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
             "Given any two notes in the loaded scale, show the interval in cents between them",
             juce::NotificationType::dontSendNotification);
         intervalPainter->mode = IntervalMatrix::IntervalPainter::INTERV;
+
+        intervalPainter->setSizeFromTuning();
         repaint();
     }
 
@@ -965,6 +1488,7 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
                            juce::NotificationType::dontSendNotification);
         intervalPainter->mode = IntervalMatrix::IntervalPainter::DIST;
 
+        intervalPainter->setSizeFromTuning();
         repaint();
     }
 
@@ -997,34 +1521,173 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
         {
             INTERV,
             DIST,
-            ROTATION
+            ROTATION,
+            TRUE_KEYS
         } mode{INTERV};
         IntervalPainter(IntervalMatrix *m) : matrix(m) {}
 
         static constexpr int cellH{14}, cellW{35};
         void setSizeFromTuning()
         {
-            auto ic = matrix->tuning.scale.count + 2;
-            auto nh = ic * cellH;
-            auto nw = ic * cellW;
+            if (mode == TRUE_KEYS)
+            {
+                setSize(matrix->viewport->getBounds().getWidth() - 4,
+                        matrix->viewport->getBounds().getHeight() - 4);
+            }
+            else
+            {
+                auto ic = matrix->tuning.scale.count + 2;
+                auto nh = ic * cellH;
+                auto nw = ic * cellW;
 
-            setSize(nw, nh);
+                setSize(nw, nh);
+            }
         }
 
+        void paintTrueKeys(juce::Graphics &g)
+        {
+            namespace clr = Colors::TuningOverlay::Interval;
+            g.fillAll(skin->getColor(clr::Background));
+
+            auto &bs = matrix->bitset;
+
+            int numNotes{0};
+            for (int i = 0; i < bs.size(); ++i)
+                numNotes += bs[i];
+
+            g.setFont(skin->fontManager->getLatoAtSize(9));
+
+            if (numNotes == 0)
+            {
+                g.setColour(skin->getColor(clr::HeatmapZero));
+                return;
+            }
+
+            int oct_offset = 1;
+            if (matrix->overlay->storage)
+                oct_offset = Surge::Storage::getUserDefaultValue(matrix->overlay->storage,
+                                                                 Surge::Storage::MiddleC, 1);
+
+            auto bx = getLocalBounds().withTrimmedTop(15).reduced(2);
+            auto xpos = bx.getX();
+            auto ypos = bx.getY();
+
+            auto colWidth = 45;
+            auto rowHeight = 20;
+
+            auto noteName = [oct_offset](int nn) {
+                std::string s = get_notename(nn, oct_offset);
+                s += " (" + std::to_string(nn) + ")";
+                return s;
+            };
+            {
+                int hpos = xpos + 2 * colWidth;
+                for (int i = 0; i < bs.size(); ++i)
+                {
+                    if (bs[i])
+                    {
+                        g.setColour(skin->getColor(clr::HeatmapZero));
+                        g.drawText(noteName(i), hpos, ypos, colWidth, rowHeight,
+                                   juce::Justification::centred);
+                        hpos += colWidth;
+                    }
+                }
+            }
+
+            ypos += rowHeight;
+
+            auto noteToFreq = [this](auto note) -> float {
+                auto st = matrix->overlay->storage;
+                auto mts = matrix->overlay->mtsMode;
+                if (mts)
+                {
+                    return MTS_NoteToFrequency(st->oddsound_mts_client, note, 0);
+                }
+                else
+                {
+                    return matrix->tuning.frequencyForMidiNote(note);
+                }
+            };
+
+            auto noteToPitch = [this](auto note) -> float {
+                auto st = matrix->overlay->storage;
+                auto mts = matrix->overlay->mtsMode;
+                if (mts)
+                {
+                    return log2(MTS_NoteToFrequency(st->oddsound_mts_client, note, 0) /
+                                Tunings::MIDI_0_FREQ);
+                }
+                else
+                {
+                    return matrix->tuning.logScaledFrequencyForMidiNote(note);
+                }
+            };
+
+            for (int i = 0; i < bs.size(); ++i)
+            {
+                if (bs[i])
+                {
+                    auto hpos = xpos;
+                    g.setColour(skin->getColor(clr::HeatmapZero));
+                    g.drawText(noteName(i), hpos, ypos, colWidth, rowHeight,
+                               juce::Justification::centredLeft);
+                    hpos += colWidth;
+                    g.drawText(fmt::format("{:.2f}Hz", noteToFreq(i)), hpos, ypos, colWidth,
+                               rowHeight, juce::Justification::centredLeft);
+                    hpos += colWidth;
+
+                    auto pitch0 = noteToPitch(i);
+
+                    for (int j = 0; j < bs.size(); ++j)
+                    {
+                        if (bs[j])
+                        {
+                            auto bx = juce::Rectangle<int>(hpos, ypos, colWidth, rowHeight);
+                            if (i != j)
+                            {
+                                g.setColour(skin->getColor(clr::HeatmapZero));
+                                g.fillRect(bx);
+                                g.setColour(juce::Colours::darkgrey);
+                                g.drawRect(bx, 1);
+                                g.setColour(skin->getColor(clr::IntervalText));
+                                auto pitch = noteToPitch(j);
+                                g.drawText(fmt::format("{:.2f}", 1200 * (pitch0 - pitch)), bx,
+                                           juce::Justification::centred);
+                            }
+                            else
+                            {
+                                g.setColour(juce::Colours::darkgrey);
+                                g.fillRect(bx);
+                            }
+                            hpos += colWidth;
+                        }
+                    }
+
+                    ypos += rowHeight;
+                }
+            }
+        }
         void paint(juce::Graphics &g) override
         {
             if (!skin)
                 return;
 
+            if (mode == TRUE_KEYS)
+            {
+                paintTrueKeys(g);
+                return;
+            }
             namespace clr = Colors::TuningOverlay::Interval;
             g.fillAll(skin->getColor(clr::Background));
             auto ic = matrix->tuning.scale.count;
-            int mt = ic + (mode == ROTATION ? 1 : 2);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
+            int mt = ic + 2;
+            g.setFont(skin->fontManager->getLatoAtSize(9));
             for (int i = 0; i < mt; ++i)
             {
+                bool noi = i > 0 ? matrix->notesOn[i - 1] : false;
                 for (int j = 0; j < mt; ++j)
                 {
+                    bool noj = j > 0 ? matrix->notesOn[j - 1] : false;
                     bool isHovered = false;
                     if ((i == hoverI && j == hoverJ) || (i == 0 && j == hoverJ) ||
                         (i == hoverI && j == 0))
@@ -1105,6 +1768,11 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
                             auto c2 = skin->getColor(clr::HeatmapPosNear);
                             g.setColour(c1.interpolatedWith(c2, b));
                         }
+
+                        if (noi && noj)
+                        {
+                            g.setColour(skin->getColor(clr::NoteLabelBackgroundPlayed));
+                        }
                         g.fillRect(bx);
 
                         auto displayCents = cdiff;
@@ -1117,21 +1785,22 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
                             g.setColour(skin->getColor(clr::IntervalText));
                         g.drawText(lb, bx, juce::Justification::centred);
                     }
-                    else if (mode == ROTATION && i > 0)
+                    else if (mode == ROTATION && i > 0 && j > 0)
                     {
                         auto centsi = matrix->rcents[j - 1];
-                        auto centsj = matrix->rcents[i + j - 1];
+                        auto centsj = matrix->rcents[i + j - 2];
                         auto cdiff = centsj - centsi;
 
-                        auto disNote = i;
+                        auto disNote = i - 1;
                         auto lastTone =
                             matrix->tuning.scale.tones[matrix->tuning.scale.count - 1].cents;
                         auto evenStep = lastTone / matrix->tuning.scale.count;
                         auto desCents = disNote * evenStep;
 
+                        juce::Colour bg;
                         if (fabs(cdiff - desCents) < 0.1)
                         {
-                            g.setColour(skin->getColor(clr::HeatmapZero));
+                            bg = (skin->getColor(clr::HeatmapZero));
                         }
                         else if (cdiff < desCents)
                         {
@@ -1140,7 +1809,7 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
                             auto r = (1.0 - dist);
                             auto c1 = skin->getColor(clr::HeatmapNegFar);
                             auto c2 = skin->getColor(clr::HeatmapNegNear);
-                            g.setColour(c1.interpolatedWith(c2, r));
+                            bg = (c1.interpolatedWith(c2, r));
                         }
                         else
                         {
@@ -1148,15 +1817,23 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
                             auto b = 1.0 - dist;
                             auto c1 = skin->getColor(clr::HeatmapPosFar);
                             auto c2 = skin->getColor(clr::HeatmapPosNear);
-                            g.setColour(c1.interpolatedWith(c2, b));
+                            bg = (c1.interpolatedWith(c2, b));
                         }
+                        if (i == mt - 1 || i == 1)
+                            bg = skin->getColor(clr::HeatmapZero).withAlpha(0.9f);
+
+                        g.setColour(bg);
                         g.fillRect(bx);
 
+                        juce::Colour fg;
                         if (isHovered)
-                            g.setColour(skin->getColor(clr::IntervalTextHover));
+                            fg = skin->getColor(clr::IntervalTextHover);
                         else
-                            g.setColour(skin->getColor(clr::IntervalText));
+                            fg = skin->getColor(clr::IntervalText);
+                        if (i == mt - 1 || i == 1)
+                            fg = fg.withAlpha(0.7f);
 
+                        g.setColour(fg);
                         g.drawText(fmt::format("{:.1f}", cdiff), bx, juce::Justification::centred);
                     }
                 }
@@ -1168,6 +1845,11 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
         juce::Point<float> lastMousePos;
         void mouseDown(const juce::MouseEvent &e) override
         {
+            if (mode == TRUE_KEYS)
+            {
+                return;
+            }
+
             if (!Surge::GUI::showCursor(matrix->overlay->storage))
             {
                 juce::Desktop::getInstance().getMainMouseSource().enableUnboundedMouseMovement(
@@ -1177,6 +1859,11 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
         }
         void mouseUp(const juce::MouseEvent &e) override
         {
+            if (mode == TRUE_KEYS)
+            {
+                return;
+            }
+
             if (!Surge::GUI::showCursor(matrix->overlay->storage))
             {
                 juce::Desktop::getInstance().getMainMouseSource().enableUnboundedMouseMovement(
@@ -1188,6 +1875,10 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
         }
         void mouseDrag(const juce::MouseEvent &e) override
         {
+            if (mode == TRUE_KEYS)
+            {
+                return;
+            }
 
             auto dPos = e.position.getY() - lastMousePos.getY();
             dPos = -dPos;
@@ -1199,8 +1890,14 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
 
             if (mode == ROTATION)
             {
-                int tonI = (hoverI - 1 + hoverJ - 1) % matrix->tuning.scale.count;
-                matrix->overlay->onToneChanged(tonI, matrix->tuning.scale.tones[tonI].cents + dPos);
+                if (hoverI > 1 && hoverI <= matrix->tuning.scale.count)
+                {
+                    int tonI = (hoverI - 1 + hoverJ - 2);
+
+                    tonI = tonI % matrix->tuning.scale.count;
+                    matrix->overlay->onToneChanged(tonI,
+                                                   matrix->tuning.scale.tones[tonI].cents + dPos);
+                }
             }
             else
             {
@@ -1297,7 +1994,12 @@ struct IntervalMatrix : public juce::Component, public Surge::GUI::SkinConsuming
         intervalPainter->setSizeFromTuning();
     }
 
-    void onSkinChanged() override { intervalPainter->setSkin(skin, associatedBitmapStore); }
+    void onSkinChanged() override
+    {
+        intervalPainter->setSkin(skin, associatedBitmapStore);
+        whatLabel->setFont(skin->fontManager->getLatoAtSize(12, juce::Font::bold));
+        explLabel->setFont(skin->fontManager->getLatoAtSize(8));
+    }
     std::vector<bool> notesOn;
     std::bitset<128> bitset{0};
     void setNotesOn(const std::bitset<128> &bs)
@@ -1382,12 +2084,14 @@ void RadialScaleGraph::mouseDown(const juce::MouseEvent &e)
         angleAtMouseDown = toneKnobs[hotSpotIndex + 1]->angle;
         dIntervalAtMouseDown = dInterval;
     }
+    lastDragPoint = e.position;
 }
 
 void RadialScaleGraph::mouseDrag(const juce::MouseEvent &e)
 {
     if (hotSpotIndex != -1)
     {
+        float dr = 0;
         auto mdp = e.getMouseDownPosition().toFloat();
         auto xd = mdp.getX();
         auto yd = mdp.getY();
@@ -1398,25 +2102,75 @@ void RadialScaleGraph::mouseDrag(const juce::MouseEvent &e)
         auto y = mp.getY();
         screenTransformInverted.transformPoint(x, y);
 
-        auto dr = -sqrt(xd * xd + yd * yd) + sqrt(x * x + y * y);
-        auto speed = 0.7;
-        if (e.mods.isShiftDown())
-            speed = speed * 0.1;
-        dr = dr * speed;
+        auto lx = lastDragPoint.getX();
+        auto ly = lastDragPoint.getY();
+        screenTransformInverted.transformPoint(lx, ly);
 
-        toneKnobs[hotSpotIndex + 1]->angle = angleAtMouseDown + 100 * dr / dIntervalAtMouseDown;
-        toneKnobs[hotSpotIndex + 1]->repaint();
-        selfEditGuard++;
-        if (hotSpotIndex == scale.count - 1 && whichSideOfZero > 0)
+        if (displayMode == DisplayMode::RADIAL)
         {
-            auto ct = e.mods.isShiftDown() ? 0.05 : 1;
-            onScaleRescaled(dr > 0 ? ct : -ct);
+            dr = -sqrt(xd * xd + yd * yd) + sqrt(x * x + y * y);
+
+            auto speed = 0.7;
+            if (e.mods.isShiftDown())
+                speed = speed * 0.1;
+            dr = dr * speed;
+
+            toneKnobs[hotSpotIndex + 1]->angle = angleAtMouseDown + 100 * dr / dIntervalAtMouseDown;
+            toneKnobs[hotSpotIndex + 1]->repaint();
+            selfEditGuard++;
+            if (hotSpotIndex == scale.count - 1 && whichSideOfZero > 0)
+            {
+                auto ct = e.mods.isShiftDown() ? 0.05 : 1;
+                onScaleRescaled(dr > 0 ? ct : -ct);
+            }
+            else
+            {
+                onToneChanged(hotSpotIndex, centsAtMouseDown + 100 * dr / dIntervalAtMouseDown);
+            }
+            selfEditGuard--;
         }
         else
         {
-            onToneChanged(hotSpotIndex, centsAtMouseDown + 100 * dr / dIntervalAtMouseDown);
+            auto xy2ph = [](auto x, auto y) {
+                float res{0};
+                if (fabs(x) < 0.001)
+                {
+                    res = (y > 0) ? 1 : -1;
+                }
+                else
+                {
+                    res = atan(y / x) / M_PI;
+                    if (x > 0)
+                        res = 0.5 - res;
+                    else
+                        res = 1.5 - res;
+                }
+                return res / 2.0;
+            };
+            auto phsDn = xy2ph(xd, yd);
+            auto phsMs = xy2ph(x, y);
+
+            toneKnobs[hotSpotIndex + 1]->angle = angleAtMouseDown + 100 * dr / dIntervalAtMouseDown;
+            toneKnobs[hotSpotIndex + 1]->repaint();
+            selfEditGuard++;
+            if (hotSpotIndex == scale.count - 1 && whichSideOfZero > 0)
+            {
+                auto ct = e.mods.isShiftDown() ? 0.05 : 1;
+                onScaleRescaled((ly - y) > 0 ? ct : -ct);
+            }
+            else if (hotSpotIndex == scale.count - 1)
+            {
+                auto diff = (y - ly);
+                auto ct = e.mods.isShiftDown() ? 0.01 : 0.2;
+                onToneChanged(hotSpotIndex, (1.0 + ct * diff) * scale.tones.back().cents);
+            }
+            else
+            {
+                onToneChanged(hotSpotIndex, phsMs * scale.tones.back().cents);
+            }
+            selfEditGuard--;
         }
-        selfEditGuard--;
+        lastDragPoint = e.position;
     }
 }
 
@@ -1479,6 +2233,11 @@ void RadialScaleGraph::textEditorReturnKeyPressed(juce::TextEditor &editor)
     }
 }
 
+void RadialScaleGraph::textEditorFocusLost(juce::TextEditor &editor)
+{
+    editor.setHighlightedRegion(juce::Range(-1, -1));
+}
+
 struct SCLKBMDisplay : public juce::Component,
                        Surge::GUI::SkinConsumingComponent,
                        juce::TextEditor::Listener,
@@ -1490,7 +2249,6 @@ struct SCLKBMDisplay : public juce::Component,
         sclDocument->addListener(this);
         sclTokeniser = std::make_unique<SCLKBMTokeniser>();
         scl = std::make_unique<juce::CodeEditorComponent>(*sclDocument, sclTokeniser.get());
-        scl->setFont(Surge::GUI::getFontManager()->getFiraMonoAtSize(9));
         scl->setLineNumbersShown(false);
         scl->setScrollbarThickness(8);
         addAndMakeVisible(*scl);
@@ -1500,21 +2258,18 @@ struct SCLKBMDisplay : public juce::Component,
         kbmTokeniser = std::make_unique<SCLKBMTokeniser>(false);
 
         kbm = std::make_unique<juce::CodeEditorComponent>(*kbmDocument, kbmTokeniser.get());
-        kbm->setFont(Surge::GUI::getFontManager()->getFiraMonoAtSize(9));
         kbm->setLineNumbersShown(false);
         kbm->setScrollbarThickness(8);
         addAndMakeVisible(*kbm);
 
-        auto teProps = [](const auto &te) {
-            te->setFont(Surge::GUI::getFontManager()->getFiraMonoAtSize(9));
+        auto teProps = [this](const auto &te) {
             te->setJustification((juce::Justification::verticallyCentred));
-            te->setIndents(4, (te->getHeight() - te->getTextHeight()) / 2);
+            // te->setIndents(4, (te->getHeight() - te->getTextHeight()) / 2);
         };
 
         auto newL = [this](const std::string &s) {
             auto res = std::make_unique<juce::Label>(s, s);
             res->setText(s, juce::dontSendNotification);
-            res->setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
             addAndMakeVisible(*res);
             return res;
         };
@@ -1523,12 +2278,16 @@ struct SCLKBMDisplay : public juce::Component,
         teProps(evenDivOf);
         evenDivOf->setText("2", juce::dontSendNotification);
         addAndMakeVisible(*evenDivOf);
+        evenDivOf->addListener(this);
+        evenDivOf->setSelectAllWhenFocused(true);
 
         evenDivIntoL = newL("into");
         evenDivInto = std::make_unique<juce::TextEditor>();
         teProps(evenDivInto);
         evenDivInto->setText("12", juce::dontSendNotification);
         addAndMakeVisible(*evenDivInto);
+        evenDivInto->addListener(this);
+        evenDivInto->setSelectAllWhenFocused(true);
 
         evenDivStepsL = newL("steps");
 
@@ -1537,12 +2296,11 @@ struct SCLKBMDisplay : public juce::Component,
         edoGo->setHeightOfOneImage(13);
         edoGo->setSkin(skin, associatedBitmapStore);
         edoGo->onClick = [this]() {
-            // FIXME locale
             auto txt = evenDivOf->getText();
 
             try
             {
-                if (txt.contains("."))
+                if (txt.contains(".") || txt.contains(","))
                 {
                     auto spanct = std::atof(evenDivOf->getText().toRawUTF8());
                     auto num = std::atoi(evenDivInto->getText().toRawUTF8());
@@ -1581,25 +2339,30 @@ struct SCLKBMDisplay : public juce::Component,
         teProps(kbmStart);
         kbmStart->setText("60", juce::dontSendNotification);
         addAndMakeVisible(*kbmStart);
+        kbmStart->addListener(this);
+        kbmStart->setSelectAllWhenFocused(true);
 
         kbmConstantL = newL("Constant:");
         kbmConstant = std::make_unique<juce::TextEditor>();
         teProps(kbmConstant);
         kbmConstant->setText("69", juce::dontSendNotification);
         addAndMakeVisible(*kbmConstant);
+        kbmConstant->addListener(this);
+        kbmConstant->setSelectAllWhenFocused(true);
 
         kbmFreqL = newL("Freq:");
         kbmFreq = std::make_unique<juce::TextEditor>();
         teProps(kbmFreq);
         kbmFreq->setText("440", juce::dontSendNotification);
         addAndMakeVisible(*kbmFreq);
+        kbmFreq->addListener(this);
+        kbmFreq->setSelectAllWhenFocused(true);
 
         kbmGo = std::make_unique<Surge::Widgets::SelfDrawButton>("Generate");
         kbmGo->setStorage(overlay->storage);
         kbmGo->setHeightOfOneImage(13);
         kbmGo->setSkin(skin, associatedBitmapStore);
         kbmGo->onClick = [this]() {
-            // FIXME locale
             auto start = std::atoi(kbmStart->getText().toRawUTF8());
             auto constant = std::atoi(kbmConstant->getText().toRawUTF8());
             auto freq = std::atof(kbmFreq->getText().toRawUTF8());
@@ -1769,14 +2532,15 @@ struct SCLKBMDisplay : public juce::Component,
         scl->setBounds(b);
         kbm->setBounds(b.translated(w / 2, 0));
 
-        auto r = juce::Rectangle<int>(0, h - 20, w, 20);
-
+        auto r = juce::Rectangle<int>(0, h - 21, w, 20);
         auto s = r.withWidth(w / 2).withTrimmedLeft(2);
+
         auto nxt = [&s](int p) {
             auto q = s.withWidth(p);
             s = s.withTrimmedLeft(p);
             return q.reduced(0, 2);
         };
+
         evenDivOfL->setBounds(nxt(37));
         evenDivOf->setBounds(nxt(80));
         evenDivIntoL->setBounds(nxt(30));
@@ -1794,11 +2558,12 @@ struct SCLKBMDisplay : public juce::Component,
         s = s.translated(3, 0);
         kbmGo->setBounds(nxt(50));
 
-        auto teProps = [](const auto &te) {
-            te->setFont(Surge::GUI::getFontManager()->getFiraMonoAtSize(9));
+        auto teProps = [this](const auto &te) {
+            te->setFont(skin->fontManager->getFiraMonoAtSize(9));
             te->setJustification((juce::Justification::verticallyCentred));
             te->setIndents(4, (te->getHeight() - te->getTextHeight()) / 2);
         };
+
         teProps(evenDivOf);
         teProps(evenDivInto);
         teProps(kbmStart);
@@ -1824,6 +2589,10 @@ struct SCLKBMDisplay : public juce::Component,
     }
 
     void textEditorTextChanged(juce::TextEditor &editor) override { setApplyEnabled(true); }
+    void textEditorFocusLost(juce::TextEditor &editor) override
+    {
+        editor.setHighlightedRegion(juce::Range(-1, -1));
+    }
 
     void onSkinChanged() override
     {
@@ -1853,11 +2622,13 @@ struct SCLKBMDisplay : public juce::Component,
                               kbmStartL.get(), kbmConstantL.get(), kbmFreqL.get()})
         {
             r->setColour(juce::Label::textColourId, skin->getColor(qclr::ToneLabelText));
+            r->setFont(skin->fontManager->getLatoAtSize(9));
         }
 
         for (const auto &r :
              {evenDivInto.get(), evenDivOf.get(), kbmStart.get(), kbmConstant.get(), kbmFreq.get()})
         {
+            r->setFont(skin->fontManager->getLatoAtSize(9));
 
             r->setColour(juce::TextEditor::ColourIds::backgroundColourId,
                          skin->getColor(qclr::ToneLabelBackground));
@@ -1868,7 +2639,16 @@ struct SCLKBMDisplay : public juce::Component,
             r->setColour(juce::TextEditor::ColourIds::textColourId,
                          skin->getColor(qclr::ToneLabelText));
             r->applyColourToAllText(skin->getColor(qclr::ToneLabelText), true);
+
+            // Work around a buglet that the text editor applies fonts only to newly inserted
+            // text after setFont
+            auto t = r->getText();
+            r->setText("--", juce::dontSendNotification);
+            r->setText(t, juce::dontSendNotification);
         }
+
+        scl->setFont(skin->fontManager->getFiraMonoAtSize(9));
+        kbm->setFont(skin->fontManager->getFiraMonoAtSize(9));
     }
 
     std::function<void(const std::string &scl, const std::string &kbl)> onTextChanged =
@@ -1929,7 +2709,7 @@ struct TuningControlArea : public juce::Component,
 
         {
             int marginPos = xpos + margin;
-            int btnWidth = 210;
+            int btnWidth = 280;
             int ypos = 1 + labelHeight + margin;
 
             selectL = newL("Edit Mode");
@@ -1941,18 +2721,18 @@ struct TuningControlArea : public juce::Component,
 
             selectS->setBounds(btnrect);
             selectS->setStorage(overlay->storage);
-            selectS->setLabels({"Scala", "Radial", "Interval", "To Equal", "Rotation"});
+            selectS->setLabels({"Scala", "Polar", "Interval", "To Equal", "Rotation", "True Keys"});
             selectS->addListener(this);
             selectS->setDraggable(true);
             selectS->setTag(tag_select_tab);
             selectS->setHeightOfOneImage(buttonHeight);
             selectS->setRows(1);
-            selectS->setColumns(5);
+            selectS->setColumns(6);
             selectS->setDraggable(true);
             selectS->setSkin(skin, associatedBitmapStore);
             selectS->setValue(
                 overlay->storage->getPatch().dawExtraState.editor.tuningOverlayState.editMode /
-                4.f);
+                5.f);
             addAndMakeVisible(*selectS);
             xpos += btnWidth + 10;
         }
@@ -2007,7 +2787,7 @@ struct TuningControlArea : public juce::Component,
     {
         auto res = std::make_unique<juce::Label>(s, s);
         res->setText(s, juce::dontSendNotification);
-        res->setFont(Surge::GUI::getFontManager()->getLatoAtSize(9, juce::Font::bold));
+        res->setFont(skin->fontManager->getLatoAtSize(9, juce::Font::bold));
         res->setColour(juce::Label::textColourId, skin->getColor(Colors::MSEGEditor::Text));
         return res;
     }
@@ -2019,7 +2799,7 @@ struct TuningControlArea : public juce::Component,
         {
         case tag_select_tab:
         {
-            int m = c->getValue() * 4;
+            int m = c->getValue() * 5;
             overlay->showEditor(m);
             selectS->repaint();
         }
@@ -2033,14 +2813,17 @@ struct TuningControlArea : public juce::Component,
                     "SCL Save Error");
                 break;
             }
-            fileChooser = std::make_unique<juce::FileChooser>("Save SCL");
+            fileChooser = std::make_unique<juce::FileChooser>("Save SCL", juce::File(), "*.scl");
             fileChooser->launchAsync(
                 juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
                     juce::FileBrowserComponent::warnAboutOverwriting,
                 [this](const juce::FileChooser &c) {
                     auto result = c.getResults();
+
                     if (result.isEmpty() || result.size() > 1)
+                    {
                         return;
+                    }
 
                     auto fsp = fs::path{result[0].getFullPathName().toStdString()};
                     fsp = fsp.replace_extension(".scl");
@@ -2076,6 +2859,8 @@ struct TuningControlArea : public juce::Component,
         {
             if (applyS->isEnabled())
             {
+                if (overlay->storage && overlay->editor)
+                    overlay->editor->undoManager()->pushTuning(overlay->storage->currentTuning);
                 auto *sck = overlay->sclKbmDisplay.get();
                 sck->onTextChanged(sck->sclDocument->getAllContent().toStdString(),
                                    sck->kbmDocument->getAllContent().toStdString());
@@ -2109,7 +2894,7 @@ TuningOverlay::TuningOverlay()
 {
     tuning = Tunings::Tuning(Tunings::evenTemperament12NoteScale(),
                              Tunings::startScaleOnAndTuneNoteTo(60, 60, Tunings::MIDI_0_FREQ * 32));
-    tuningKeyboardTableModel = std::make_unique<TuningTableListBoxModel>();
+    tuningKeyboardTableModel = std::make_unique<TuningTableListBoxModel>(this);
     tuningKeyboardTableModel->tuningUpdated(tuning);
     tuningKeyboardTable =
         std::make_unique<juce::TableListBox>("Tuning", tuningKeyboardTableModel.get());
@@ -2125,7 +2910,7 @@ TuningOverlay::TuningOverlay()
         this->onNewSCLKBM(s, k);
     };
 
-    radialScaleGraph = std::make_unique<RadialScaleGraph>();
+    radialScaleGraph = std::make_unique<RadialScaleGraph>(this->storage);
     radialScaleGraph->onToneChanged = [this](int note, double d) { this->onToneChanged(note, d); };
     radialScaleGraph->onToneStringChanged = [this](int note, const std::string &d) {
         this->onToneStringChanged(note, d);
@@ -2150,7 +2935,15 @@ TuningOverlay::TuningOverlay()
     intervalMatrix->setVisible(false);
 }
 
-void TuningOverlay::setStorage(SurgeStorage *s) { storage = s; }
+void TuningOverlay::setStorage(SurgeStorage *s)
+{
+    storage = s;
+    radialScaleGraph->setStorage(s);
+    tuningKeyboardTableModel->setStorage(s);
+    bool isOddsoundOnAsClient =
+        storage->oddsound_mts_active_as_client && storage->oddsound_mts_client;
+    setMTSMode(isOddsoundOnAsClient);
+}
 
 TuningOverlay::~TuningOverlay() = default;
 
@@ -2162,6 +2955,9 @@ void TuningOverlay::resized()
 
     int kbWidth = 87;
     int ctrlHeight = 35;
+
+    if (mtsMode)
+        ctrlHeight = 0;
 
     t.transformPoint(w, h);
 
@@ -2189,10 +2985,13 @@ void TuningOverlay::resized()
 void TuningOverlay::showEditor(int which)
 {
     jassert(which >= 0 && which <= 5);
-    if (which == 0)
-        controlArea->applyS->setVisible(true);
-    else
-        controlArea->applyS->setVisible(false);
+    if (controlArea->applyS)
+    {
+        if (which == 0)
+            controlArea->applyS->setVisible(true);
+        else
+            controlArea->applyS->setVisible(false);
+    }
     sclKbmDisplay->setVisible(which == 0);
     radialScaleGraph->setVisible(which == 1);
     intervalMatrix->setVisible(which >= 2);
@@ -2208,6 +3007,10 @@ void TuningOverlay::showEditor(int which)
     {
         intervalMatrix->setRotationMode();
     }
+    if (which == 5)
+    {
+        intervalMatrix->setTrueKeyboardMode();
+    }
 
     if (storage)
     {
@@ -2219,6 +3022,7 @@ void TuningOverlay::onToneChanged(int tone, double newCentsValue)
 {
     if (storage)
     {
+        editor->undoManager()->pushTuning(storage->currentTuning);
         storage->currentScale.tones[tone].type = Tunings::Tone::kToneCents;
         storage->currentScale.tones[tone].cents = newCentsValue;
         recalculateScaleText();
@@ -2230,6 +3034,8 @@ void TuningOverlay::onScaleRescaled(double scaleBy)
     if (!storage)
         return;
 
+    editor->undoManager()->pushTuning(storage->currentTuning);
+
     /*
      * OK so we want a 1 cent move on top so that is top -> top+1 for scaleBy = 1
      * top ( 1 + x * scaleBy ) = top+1
@@ -2239,6 +3045,13 @@ void TuningOverlay::onScaleRescaled(double scaleBy)
     double sFactor = (tCents + 1) / tCents - 1;
 
     double scale = (1.0 + sFactor * scaleBy);
+    // smallest compression is 20 cents
+    static constexpr float smallestRepInterval{100};
+    if (tCents <= smallestRepInterval && scaleBy < 0)
+    {
+        scale = smallestRepInterval / tCents;
+    }
+
     for (auto &t : storage->currentScale.tones)
     {
         t.type = Tunings::Tone::kToneCents;
@@ -2251,6 +3064,8 @@ void TuningOverlay::onScaleRescaledAbsolute(double riTo)
 {
     if (!storage)
         return;
+
+    editor->undoManager()->pushTuning(storage->currentTuning);
 
     /*
      * OK so we want a 1 cent move on top so that is top -> top+1 for scaleBy = 1
@@ -2272,6 +3087,7 @@ void TuningOverlay::onToneStringChanged(int tone, const std::string &newStringVa
 {
     if (storage)
     {
+        editor->undoManager()->pushTuning(storage->currentTuning);
         try
         {
             auto parsed = Tunings::toneFromString(newStringValue);
@@ -2289,6 +3105,8 @@ void TuningOverlay::onNewSCLKBM(const std::string &scl, const std::string &kbm)
 {
     if (!storage)
         return;
+
+    editor->undoManager()->pushTuning(storage->currentTuning);
 
     try
     {
@@ -2341,6 +3159,7 @@ void TuningOverlay::recalculateScaleText()
     catch (const Tunings::TuningError &e)
     {
     }
+    resetParentTitle();
 }
 
 void TuningOverlay::setTuning(const Tunings::Tuning &t)
@@ -2350,7 +3169,29 @@ void TuningOverlay::setTuning(const Tunings::Tuning &t)
     sclKbmDisplay->setTuning(t);
     radialScaleGraph->setTuning(t);
     intervalMatrix->setTuning(t);
+
+    resetParentTitle();
     repaint();
+}
+
+void TuningOverlay::resetParentTitle()
+{
+    if (mtsMode)
+    {
+        std::string scale = "";
+        if (storage)
+        {
+            scale = MTS_GetScaleName(storage->oddsound_mts_client);
+            scale = " - " + scale;
+        }
+        setEnclosingParentTitle("Tuning Visualizer" + scale);
+    }
+    else
+    {
+        setEnclosingParentTitle("Tuning Editor - " + tuning.scale.description);
+    }
+    if (getParentComponent())
+        getParentComponent()->repaint();
 }
 
 void TuningOverlay::onSkinChanged()
@@ -2382,6 +3223,21 @@ void TuningOverlay::filesDropped(const juce::StringArray &files, int x, int y)
         return;
     if (editor)
         editor->juceEditor->filesDropped(files, x, y);
+}
+
+void TuningOverlay::setMTSMode(bool isMTSOn)
+{
+    mtsMode = isMTSOn;
+
+    resetParentTitle();
+    resized();
+
+    if (controlArea)
+        controlArea->setVisible(!isMTSOn);
+    if (isMTSOn)
+    {
+        showEditor(5);
+    }
 }
 
 } // namespace Overlays

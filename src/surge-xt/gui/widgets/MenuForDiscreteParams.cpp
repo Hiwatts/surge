@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "MenuForDiscreteParams.h"
 #include "SurgeGUIEditor.h"
@@ -24,7 +31,8 @@ namespace Surge
 {
 namespace Widgets
 {
-MenuForDiscreteParams::MenuForDiscreteParams() = default;
+MenuForDiscreteParams::MenuForDiscreteParams()
+    : juce::Component(), WidgetBaseMixin<MenuForDiscreteParams>(this){};
 MenuForDiscreteParams::~MenuForDiscreteParams() = default;
 
 void MenuForDiscreteParams::paint(juce::Graphics &g)
@@ -134,7 +142,7 @@ void MenuForDiscreteParams::paint(juce::Graphics &g)
         auto r = glyphMenuBounds.withTrimmedLeft(6);
         auto valcol = skin->getColor(Colors::Menu::FilterValue);
 
-        g.setFont(Surge::GUI::getFontManager()->displayFont);
+        g.setFont(skin->fontManager->displayFont);
 
         if (isHovered)
         {
@@ -156,7 +164,7 @@ void MenuForDiscreteParams::paint(juce::Graphics &g)
                      .withTrimmedBottom(4)
                      .withTrimmedLeft(6)
                      .withTrimmedRight(15);
-        g.setFont(Surge::GUI::getFontManager()->displayFont);
+        g.setFont(skin->fontManager->displayFont);
 
         auto labcol = skin->getColor(Colors::Menu::Name);
         auto valcol = skin->getColor(Colors::Menu::Value);
@@ -187,6 +195,8 @@ void MenuForDiscreteParams::mouseDown(const juce::MouseEvent &event)
         return;
     }
 
+    mouseDownLongHold(event);
+
     if (glyphMode && glyphPosition.contains(event.position))
     {
         mouseDownOrigin = event.position.toInt();
@@ -203,17 +213,21 @@ void MenuForDiscreteParams::mouseDown(const juce::MouseEvent &event)
     notifyControlModifierClicked(event.mods, true);
 }
 
-void MenuForDiscreteParams::mouseDrag(const juce::MouseEvent &e)
+void MenuForDiscreteParams::mouseDrag(const juce::MouseEvent &event)
 {
-    if (supressMainFrameMouseEvent(e))
+    if (supressMainFrameMouseEvent(event))
     {
         return;
     }
 
-    auto d = e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY();
+    mouseDragLongHold(event);
+
+    auto d = event.getDistanceFromDragStartX() - event.getDistanceFromDragStartY();
+
     if (fabs(d - lastDragDistance) > 10)
     {
         int inc = 1;
+
         if (d - lastDragDistance < 0)
         {
             inc = -1;
@@ -226,16 +240,18 @@ void MenuForDiscreteParams::mouseDrag(const juce::MouseEvent &e)
     }
 }
 
-void MenuForDiscreteParams::mouseDoubleClick(const juce::MouseEvent &e)
+void MenuForDiscreteParams::mouseDoubleClick(const juce::MouseEvent &event)
 {
-    if (glyphMode && glyphPosition.contains(e.position))
+    if (glyphMode && glyphPosition.contains(event.position))
     {
-        notifyControlModifierDoubleClicked(e.mods.allKeyboardModifiers);
+        notifyControlModifierDoubleClicked(event.mods.allKeyboardModifiers);
     }
 }
 
-void MenuForDiscreteParams::mouseUp(const juce::MouseEvent &e)
+void MenuForDiscreteParams::mouseUp(const juce::MouseEvent &event)
 {
+    mouseUpLongHold(event);
+
     if (isDraggingGlyph && !Surge::GUI::showCursor(storage))
     {
         juce::Desktop::getInstance().getMainMouseSource().enableUnboundedMouseMovement(false);
@@ -246,7 +262,7 @@ void MenuForDiscreteParams::mouseUp(const juce::MouseEvent &e)
     isDraggingGlyph = false;
 }
 
-void MenuForDiscreteParams::mouseWheelMove(const juce::MouseEvent &e,
+void MenuForDiscreteParams::mouseWheelMove(const juce::MouseEvent &event,
                                            const juce::MouseWheelDetails &w)
 {
     int dir = wheelAccumulationHelper.accumulate(w, false, true);
@@ -337,7 +353,9 @@ float MenuForDiscreteParams::nextValueInOrder(float v, int inc)
 
 std::unique_ptr<juce::AccessibilityHandler> MenuForDiscreteParams::createAccessibilityHandler()
 {
-    return std::make_unique<DiscreteAH<MenuForDiscreteParams>>(this);
+    // Why a slider? combo box announces wrong
+    return std::make_unique<DiscreteAH<MenuForDiscreteParams, juce::AccessibilityRole::slider>>(
+        this);
 }
 
 bool MenuForDiscreteParams::keyPressed(const juce::KeyPress &key)
@@ -366,8 +384,23 @@ bool MenuForDiscreteParams::keyPressed(const juce::KeyPress &key)
     setValue(nextValueInOrder(value, -dir));
     notifyValueChanged();
     notifyEndEdit();
+
+    rebuildOnFocus = true;
     repaint();
     return true;
+}
+
+void MenuForDiscreteParams::focusLost(juce::Component::FocusChangeType cause)
+{
+    endHover();
+    if (rebuildOnFocus)
+    {
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+        if (sge)
+        {
+            sge->queue_refresh = true;
+        }
+    }
 }
 
 } // namespace Widgets

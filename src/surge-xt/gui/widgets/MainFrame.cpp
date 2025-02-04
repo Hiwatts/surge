@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "MainFrame.h"
 #include "SurgeGUIEditor.h"
@@ -19,6 +26,8 @@
 #include "AccessibleHelpers.h"
 #include "MultiSwitch.h"
 #include "SurgeGUIEditorTags.h"
+#include <version.h>
+#include "RuntimeFont.h"
 
 namespace Surge
 {
@@ -31,6 +40,28 @@ MainFrame::MainFrame()
     setDescription("Surge XT");
     setTitle("Main Frame");
 }
+
+void MainFrame::paint(juce::Graphics &g)
+{
+    if (bg)
+        bg->draw(g, 1.0);
+
+#if BUILD_IS_DEBUG
+    auto r = getLocalBounds().withTrimmedLeft(getWidth() - 150).withTrimmedTop(getHeight() - 45);
+    g.setColour(juce::Colours::red.withAlpha(0.7f));
+    g.fillRect(r);
+    r = r.withTrimmedTop(1);
+    g.setFont(9);
+    g.setColour(juce::Colours::white);
+    g.drawText(Surge::Build::FullVersionStr, r, juce::Justification::centredTop);
+    r = r.withTrimmedTop(14);
+    g.drawText(std::string(Surge::Build::BuildDate) + " " + Surge::Build::BuildTime, r,
+               juce::Justification::centredTop);
+    g.drawText(std::string("DEBUG BS=") + std::to_string(BLOCK_SIZE), r.reduced(2),
+               juce::Justification::bottomLeft);
+#endif
+}
+
 void MainFrame::mouseDown(const juce::MouseEvent &event)
 {
     if (!editor)
@@ -47,8 +78,9 @@ void MainFrame::mouseDown(const juce::MouseEvent &event)
 
     if (event.mods.isPopupMenu())
     {
-        editor->useDevMenu = false;
-        editor->showSettingsMenu(juce::Point<int>{}, nullptr);
+        auto where = getLocalPoint(nullptr, juce::Desktop::getInstance().getMousePosition());
+        editor->useDevMenu = event.mods.isShiftDown();
+        editor->showSettingsMenu(where, nullptr);
     }
 }
 juce::Component *MainFrame::getSynthControlsLayer()
@@ -320,5 +352,22 @@ std::unique_ptr<juce::ComponentTraverser> MainFrame::createKeyboardFocusTraverse
     return std::make_unique<GlobalKeyboardTraverser>(this);
 }
 
+juce::Component *
+MainFrame::recursivelyFindFirstChildMatching(std::function<bool(juce::Component *)> op)
+{
+    std::function<juce::Component *(juce::Component *)> rec;
+    rec = [&rec, this, &op](juce::Component *c) -> juce::Component * {
+        if (op(c))
+            return c;
+        for (auto *k : c->getChildren())
+        {
+            auto r = rec(k);
+            if (r)
+                return r;
+        }
+        return nullptr;
+    };
+    return rec(this);
+}
 } // namespace Widgets
 } // namespace Surge

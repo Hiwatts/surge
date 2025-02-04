@@ -1,20 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_ACCESSIBLEHELPERS_H
-#define SURGE_XT_ACCESSIBLEHELPERS_H
+#ifndef SURGE_SRC_SURGE_XT_GUI_ACCESSIBLEHELPERS_H
+#define SURGE_SRC_SURGE_XT_GUI_ACCESSIBLEHELPERS_H
 
 #include "Parameter.h"
 #include "SurgeGUIEditor.h"
@@ -22,6 +29,7 @@
 #include "SurgeGUIUtils.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
+#include <fmt/core.h>
 
 namespace Surge
 {
@@ -203,14 +211,30 @@ template <typename T> struct OverlayAsAccessibleButton : public juce::Component
     struct RBAH : public juce::AccessibilityHandler
     {
         explicit RBAH(OverlayAsAccessibleButton<T> *b, T *s)
-            : button(b),
-              mswitch(s), juce::AccessibilityHandler(*b, b->role,
-                                                     juce::AccessibilityActions().addAction(
-                                                         juce::AccessibilityActionType::press,
-                                                         [this]() { this->press(); }))
+            : button(b), mswitch(s),
+              juce::AccessibilityHandler(
+                  *b, b->role,
+                  juce::AccessibilityActions()
+                      .addAction(juce::AccessibilityActionType::showMenu,
+                                 [this]() { this->showMenu(); })
+                      .addAction(juce::AccessibilityActionType::press, [this]() { this->press(); }))
         {
         }
         void press() { button->onPress(mswitch); }
+        void showMenu() { button->onMenuKey(mswitch); }
+
+        juce::AccessibleState getCurrentState() const override
+        {
+            auto state = AccessibilityHandler::getCurrentState();
+
+            if (button->role == juce::AccessibilityRole::radioButton)
+            {
+                state = state.withCheckable();
+                if (button->onGetIsChecked(mswitch))
+                    state = state.withChecked();
+            }
+            return state;
+        }
 
         T *mswitch;
         OverlayAsAccessibleButton<T> *button;
@@ -221,6 +245,7 @@ template <typename T> struct OverlayAsAccessibleButton : public juce::Component
     std::function<void(T *)> onPress = [](T *) {};
     std::function<bool(T *)> onMenuKey = [](T *) { return false; };
     std::function<bool(T *)> onReturnKey = [](T *) { return false; };
+    std::function<bool(T *)> onGetIsChecked = [](T *) { return false; };
 
     bool keyPressed(const juce::KeyPress &) override;
 
@@ -228,7 +253,7 @@ template <typename T> struct OverlayAsAccessibleButton : public juce::Component
     {
         return std::make_unique<RBAH>(this, under);
     }
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OverlayAsAccessibleButton<T>);
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OverlayAsAccessibleButton);
 };
 
 template <typename T>
@@ -263,16 +288,18 @@ struct OverlayAsAccessibleButtonWithValue : public OverlayAsAccessibleButton<T>
     struct RBAHV : public juce::AccessibilityHandler
     {
         explicit RBAHV(OverlayAsAccessibleButtonWithValue<T> *b, T *s)
-            : button(b),
-              mswitch(s), juce::AccessibilityHandler(
-                              *b, b->role,
-                              juce::AccessibilityActions().addAction(
-                                  juce::AccessibilityActionType::press,
-                                  [this]() { this->press(); }),
-                              AccessibilityHandler::Interfaces{std::make_unique<BValue>(b)})
+            : button(b), mswitch(s),
+              juce::AccessibilityHandler(
+                  *b, b->role,
+                  juce::AccessibilityActions()
+                      .addAction(juce::AccessibilityActionType::showMenu,
+                                 [this]() { this->showMenu(); })
+                      .addAction(juce::AccessibilityActionType::press, [this]() { this->press(); }),
+                  AccessibilityHandler::Interfaces{std::make_unique<BValue>(b)})
         {
         }
         void press() { button->onPress(mswitch); }
+        void showMenu() { button->onMenuKey(mswitch); }
 
         T *mswitch;
         OverlayAsAccessibleButtonWithValue<T> *button;
@@ -285,7 +312,7 @@ struct OverlayAsAccessibleButtonWithValue : public OverlayAsAccessibleButton<T>
     {
         return std::make_unique<RBAHV>(this, OverlayAsAccessibleButton<T>::under);
     }
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OverlayAsAccessibleButtonWithValue<T>);
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OverlayAsAccessibleButtonWithValue);
 };
 
 template <typename T> struct OverlayAsAccessibleSlider : public juce::Component
@@ -336,10 +363,10 @@ template <typename T> struct OverlayAsAccessibleSlider : public juce::Component
     struct RBAH : public juce::AccessibilityHandler
     {
         explicit RBAH(OverlayAsAccessibleSlider<T> *s, T *u)
-            : slider(s),
-              under(u), juce::AccessibilityHandler(
-                            *s, s->role, juce::AccessibilityActions(),
-                            AccessibilityHandler::Interfaces{std::make_unique<SValue>(s)})
+            : slider(s), under(u),
+              juce::AccessibilityHandler(
+                  *s, s->role, juce::AccessibilityActions(),
+                  AccessibilityHandler::Interfaces{std::make_unique<SValue>(s)})
         {
         }
 
@@ -352,13 +379,15 @@ template <typename T> struct OverlayAsAccessibleSlider : public juce::Component
     std::function<float(T *)> onGetValue = [](T *) { return 0.f; };
     std::function<void(T *, float f)> onSetValue = [](T *, float f) { return; };
     std::function<std::string(T *, float f)> onValueToString = [](T *, float f) {
-        return std::to_string(f);
+        return fmt::format("{:.3f}", f);
     };
     std::function<void(T *, int, bool, bool)> onJogValue = [](T *, int, bool, bool) {
         jassert(false);
     };
+    std::function<void(T *)> onMenuKey = [](T *) {};
     // called with 1 0 -1 for max default min
     std::function<void(T *, int)> onMinMaxDef = [](T *, int) {};
+    std::function<void(T *)> onReturnPressed{nullptr};
 
     double min{-1}, max{1}, step{0.01};
 
@@ -366,7 +395,7 @@ template <typename T> struct OverlayAsAccessibleSlider : public juce::Component
     {
         return std::make_unique<RBAH>(this, under);
     }
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OverlayAsAccessibleSlider<T>);
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OverlayAsAccessibleSlider);
 };
 
 struct OverlayAsAccessibleContainer : public juce::Component
@@ -386,6 +415,18 @@ struct OverlayAsAccessibleContainer : public juce::Component
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OverlayAsAccessibleContainer);
+};
+
+struct HasExtendedAccessibleGroupName
+{
+    virtual ~HasExtendedAccessibleGroupName() = default;
+    std::string extendedAccessibleGroupName{};
+    virtual void setExtendedAccessibleGroupName(const std::string &s)
+    {
+        extendedAccessibleGroupName = s;
+        // We should maybe fire an ally event here but this only happens at construction time
+        // so skip it for now
+    }
 };
 
 enum AccessibleKeyEditAction
@@ -414,7 +455,7 @@ accessibleEditActionInternal(const juce::KeyPress &key)
     {
         if (key.getModifiers().isShiftDown())
             return {Decrease, Fine};
-        if (key.getModifiers().isCtrlDown())
+        if (key.getModifiers().isCommandDown())
             return {Decrease, Quantized};
         return {Decrease, NoModifier};
     }
@@ -423,7 +464,7 @@ accessibleEditActionInternal(const juce::KeyPress &key)
     {
         if (key.getModifiers().isShiftDown())
             return {Increase, Fine};
-        if (key.getModifiers().isCtrlDown())
+        if (key.getModifiers().isCommandDown())
             return {Increase, Quantized};
         return {Increase, NoModifier};
     }
@@ -464,7 +505,13 @@ accessibleEditActionInternal(const juce::KeyPress &key)
 inline std::tuple<AccessibleKeyEditAction, AccessibleKeyModifier>
 accessibleEditAction(const juce::KeyPress &key, SurgeStorage *storage)
 {
-    if (!Surge::GUI::allowKeyboardEdits(storage))
+    jassert(storage);
+    if (!storage || !Surge::GUI::allowKeyboardEdits(storage))
+        return {None, NoModifier};
+
+    if (storage &&
+        !Surge::Storage::getUserDefaultValue(
+            storage, Surge::Storage::DefaultKey::MenuAndEditKeybindingsFollowKeyboardFocus, true))
         return {None, NoModifier};
 
     return accessibleEditActionInternal(key);
@@ -482,33 +529,55 @@ template <typename T> bool OverlayAsAccessibleSlider<T>::keyPressed(const juce::
         return false;
 
     auto [action, mod] = Surge::Widgets::accessibleEditAction(key, under->storage);
+    auto ah = getAccessibilityHandler();
 
+    if (action == Return && onReturnPressed)
+    {
+        onReturnPressed(under);
+        return true;
+    }
     if (action == Increase)
     {
         onJogValue(under, +1, key.getModifiers().isShiftDown(), key.getModifiers().isCtrlDown());
+        if (ah)
+            ah->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
         return true;
     }
     if (action == Decrease)
     {
         onJogValue(under, -1, key.getModifiers().isShiftDown(), key.getModifiers().isCtrlDown());
+        if (ah)
+            ah->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
         return true;
     }
 
     if (action == ToMax)
     {
         onMinMaxDef(under, 1);
+        if (ah)
+            ah->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
         return true;
     }
 
     if (action == ToMin)
     {
         onMinMaxDef(under, -1);
+        if (ah)
+            ah->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
         return true;
     }
 
     if (action == ToDefault)
     {
         onMinMaxDef(under, 0);
+        if (ah)
+            ah->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+        return true;
+    }
+
+    if (action == OpenMenu)
+    {
+        onMenuKey(under);
         return true;
     }
     return false;
@@ -516,6 +585,7 @@ template <typename T> bool OverlayAsAccessibleSlider<T>::keyPressed(const juce::
 
 template <typename T> bool OverlayAsAccessibleButton<T>::keyPressed(const juce::KeyPress &key)
 {
+    jassert(under->storage);
     if (!under->storage)
         return false;
 

@@ -1,16 +1,23 @@
 /*
- ** Surge Synthesizer is Free and Open Source Software
- **
- ** Surge is made available under the Gnu General Public License, v3.0
- ** https://www.gnu.org/licenses/gpl-3.0.en.html
- **
- ** Copyright 2004-2021 by various individuals as described by the Git transaction log
- **
- ** All source at: https://github.com/surge-synthesizer/surge.git
- **
- ** Surge was a commercial product from 2004-2018, with Copyright and ownership
- ** in that period held by Claes Johanson at Vember Audio. Claes made Surge
- ** open source in September 2018.
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
  */
 
 #include "SurgeGUIEditor.h"
@@ -22,6 +29,7 @@
 #include "fmt/core.h"
 
 #include "ModernOscillator.h"
+#include "StringOscillator.h"
 
 #include "widgets/EffectChooser.h"
 #include "widgets/LFOAndStepDisplay.h"
@@ -35,11 +43,13 @@
 #include "widgets/Switch.h"
 #include "widgets/PatchSelector.h"
 #include "widgets/ParameterInfowindow.h"
+#include "widgets/WaveShaperSelector.h"
 #include "widgets/XMLConfiguredMenus.h"
 
-#include "overlays/TypeinParamEditor.h"
-#include "widgets/WaveShaperSelector.h"
 #include "overlays/ModulationEditor.h"
+#include "overlays/PatchStoreDialog.h"
+#include "overlays/TypeinParamEditor.h"
+#include "WavetableOscillator.h"
 
 std::string decodeControllerID(int id)
 {
@@ -63,104 +73,201 @@ std::string decodeControllerID(int id)
     return out;
 }
 
-void SurgeGUIEditor::createMIDILearnMenuEntries(juce::PopupMenu &parentMenu, bool isForMacro,
-                                                int idx, Surge::GUI::IComponentTagValue *control)
+void SurgeGUIEditor::addEnvTrigOptions(juce::PopupMenu &contextMenu, int current_scene)
+{
+    std::vector<std::string> labels = {"Reset to Zero", "Continue from Current Level"};
+    std::vector<MonoVoiceEnvelopeMode> vals = {RESTART_FROM_ZERO, RESTART_FROM_LATEST};
+
+    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                    "ENVELOPE RETRIGGER BEHAVIOR");
+
+    for (int i = 0; i < 2; ++i)
+    {
+        auto value = vals[i];
+        bool isChecked =
+            (value == synth->storage.getPatch().scene[current_scene].monoVoiceEnvelopeMode);
+
+        contextMenu.addItem(
+            Surge::GUI::toOSCase(labels[i]), true, isChecked,
+            [this, current_scene, value, isChecked]() {
+                undoManager()->pushPatch();
+
+                synth->storage.getPatch().scene[current_scene].monoVoiceEnvelopeMode = value;
+
+                if (!isChecked)
+                {
+                    synth->storage.getPatch().isDirty = true;
+                }
+            });
+    }
+}
+
+void SurgeGUIEditor::createMIDILearnMenuEntries(juce::PopupMenu &parentMenu,
+                                                const LearnMode learn_mode, const int idx,
+                                                Surge::GUI::IComponentTagValue *control)
 {
     long tag;
     int ptag;
     Parameter *p;
 
-    if (!isForMacro)
+    if (learn_mode != macro_cc)
     {
         tag = control->getTag();
         ptag = tag - start_paramtags;
         p = synth->storage.getPatch().param_ptr[ptag];
     }
 
-    // construct submenus for explicit controller mapping
-    auto midiSub = juce::PopupMenu();
-
-    for (int subs = 0; subs < 7; ++subs)
+    if (learn_mode != param_note)
     {
-        auto currentSub = juce::PopupMenu();
-        bool isSubChecked = false;
+        // construct submenus for explicit controller mapping
+        auto midiSub = juce::PopupMenu();
 
-        for (int item = 0; item < 20; ++item)
+        // which MIDI channel to use for MIDI learn via menu
+        int learnChan = (learn_mode == macro_cc) ? synth->storage.controllers_chan[idx]
+                        : (ptag < n_global_params)
+                            ? p->midichan
+                            : synth->storage.getPatch().param_ptr[ptag]->midichan;
+
+        // -1 means Omni but it's also the default value, so just double-check
+        // if the user setting matches or if it's different, then use that
+        if (learnChan == -1)
         {
-            int mc = (subs * 20) + item;
-            bool isChecked = false;
-            bool isEnabled = true;
-
-            // these CCs cannot be used for MIDI learn (see SurgeSynthesizer::channelController)
-            if (mc == 0 || mc == 6 || mc == 32 || mc == 38 || mc == 64 ||
-                (mc == 74 && synth->mpeEnabled) || (mc >= 98 && mc <= 101) || mc == 120 ||
-                mc == 123)
-            {
-                isEnabled = false;
-            }
-
-            // we don't have any more CCs to cover, so break the loop
-            if (mc > 127)
-            {
-                break;
-            }
-
-            std::string name = fmt::format("CC {:d} ({:s}) {:s}", mc, midicc_names[mc],
-                                           (!isEnabled ? "- RESERVED" : ""));
-
-            if (isForMacro)
-            {
-                if (synth->storage.controllers[idx] == mc)
-                {
-                    isChecked = true;
-                    isSubChecked = true;
-                }
-
-                currentSub.addItem(name, isEnabled, isChecked,
-                                   [this, idx, mc]() { synth->storage.controllers[idx] = mc; });
-            }
-            else
-            {
-                if ((ptag < n_global_params && p->midictrl == mc) ||
-                    (ptag > n_global_params &&
-                     synth->storage.getPatch().param_ptr[ptag]->midictrl == mc))
-                {
-                    isChecked = true;
-                    isSubChecked = true;
-                }
-
-                currentSub.addItem(name, isEnabled, isChecked, [this, p, ptag, mc]() {
-                    if (ptag < n_global_params)
-                    {
-                        p->midictrl = mc;
-                    }
-                    else
-                    {
-                        int a = ptag;
-
-                        if (ptag >= (n_global_params + n_scene_params))
-                        {
-                            a -= ptag;
-                        }
-
-                        synth->storage.getPatch().param_ptr[a]->midictrl = mc;
-                        synth->storage.getPatch().param_ptr[a + n_scene_params]->midictrl = mc;
-                    }
-                });
-            }
+            learnChan = Surge::Storage::getUserDefaultValue(
+                &(this->synth->storage), Surge::Storage::MenuBasedMIDILearnChannel, -1);
         }
 
-        std::string name =
-            fmt::format("{:d} ... {:d}", (20 * subs), std::min((20 * subs) + 20, 128) - 1);
+        for (int subs = 0; subs < 7; ++subs)
+        {
+            auto currentSub = juce::PopupMenu();
+            bool isSubChecked = false;
 
-        midiSub.addSubMenu(name, currentSub, true, nullptr, isSubChecked);
+            for (int item = 0; item < 20; ++item)
+            {
+                int mc = (subs * 20) + item;
+                bool isChecked = false;
+                bool isEnabled = true;
+
+                // these CCs cannot be used for MIDI learn (see SurgeSynthesizer::channelController)
+                if (mc == 0 || mc == 6 || mc == 32 || mc == 38 || mc == 64 || mc == 74 ||
+                    (mc >= 98 && mc <= 101) || mc == 120 || mc == 123)
+                {
+                    isEnabled = false;
+                }
+
+                // we don't have any more CCs to cover, so break the loop
+                if (mc > 127)
+                {
+                    break;
+                }
+
+                std::string name = fmt::format("CC {:d} ({:s}) {:s}", mc, midicc_names[mc],
+                                               (!isEnabled ? "- RESERVED" : ""));
+
+                switch (learn_mode)
+                {
+                case macro_cc:
+                {
+                    if (synth->storage.controllers[idx] == mc)
+                    {
+                        isChecked = true;
+                        isSubChecked = true;
+                    }
+
+                    currentSub.addItem(name, isEnabled, isChecked, [this, idx, mc, learnChan]() {
+                        synth->storage.controllers[idx] = mc;
+                        synth->storage.controllers_chan[idx] = learnChan;
+                    });
+                    break;
+                }
+                case param_cc:
+                {
+                    if ((ptag < n_global_params && p->midictrl == mc) ||
+                        (ptag > n_global_params &&
+                         synth->storage.getPatch().param_ptr[ptag]->midictrl == mc))
+                    {
+                        isChecked = true;
+                        isSubChecked = true;
+                    }
+
+                    currentSub.addItem(
+                        name, isEnabled, isChecked, [this, p, ptag, mc, learnChan]() {
+                            if (ptag < n_global_params)
+                            {
+                                p->midictrl = mc;
+                                p->midichan = learnChan;
+                            }
+                            else
+                            {
+                                synth->storage.getPatch().param_ptr[ptag]->midictrl = mc;
+                                synth->storage.getPatch().param_ptr[ptag]->midichan = learnChan;
+                            }
+                        });
+
+                    break;
+                }
+                default:
+                    break;
+                }
+            }
+
+            std::string name =
+                fmt::format("{:d} ... {:d}", (20 * subs), std::min((20 * subs) + 20, 128) - 1);
+
+            midiSub.addSubMenu(name, currentSub, true, nullptr, isSubChecked);
+        }
+
+        // select channel for MIDI learn submenu
+        auto chanSub = juce::PopupMenu();
+        auto chanSubName = fmt::format("{}: {}", Surge::GUI::toOSCase("MIDI Channel"),
+                                       learnChan == -1 ? "Omni" : std::to_string(learnChan + 1));
+
+        chanSub.addItem("Omni", true, (learnChan == -1), [this, learn_mode, p, ptag, idx]() {
+            if (learn_mode == macro_cc)
+                this->synth->storage.controllers_chan[idx] = -1;
+            else if (ptag < n_global_params)
+                p->midichan = -1;
+            else
+                this->synth->storage.getPatch().param_ptr[ptag]->midichan = -1;
+        });
+
+        for (int ch = 0; ch < 16; ch++)
+        {
+            chanSub.addItem(fmt::format("Channel {}", ch + 1), true, (learnChan == ch),
+                            [this, learn_mode, p, ptag, idx, ch]() {
+                                if (learn_mode == macro_cc)
+                                    this->synth->storage.controllers_chan[idx] = ch;
+                                else if (ptag < n_global_params)
+                                    p->midichan = ch;
+                                else
+                                    this->synth->storage.getPatch().param_ptr[ptag]->midichan = ch;
+                            });
+        }
+
+        midiSub.addSeparator();
+
+        midiSub.addSubMenu(chanSubName, chanSub);
+
+        parentMenu.addSubMenu(Surge::GUI::toOSCase("Assign to MIDI CC"), midiSub);
     }
-
-    parentMenu.addSubMenu(Surge::GUI::toOSCaseForMenu("Assign to MIDI CC"), midiSub);
 
     bool cancellearn = false;
 
-    auto query = (isForMacro ? synth->learn_custom : synth->learn_param);
+    int query;
+
+    switch (learn_mode)
+    {
+    case macro_cc:
+        query = synth->learn_macro_from_cc;
+        break;
+    case param_cc:
+        query = synth->learn_param_from_cc;
+        break;
+    case param_note:
+        query = synth->learn_param_from_note;
+        break;
+    default:
+        break;
+    }
 
     if (query > -1 && query == idx)
     {
@@ -178,76 +285,105 @@ void SurgeGUIEditor::createMIDILearnMenuEntries(juce::PopupMenu &parentMenu, boo
         learntxt = "MIDI Learn...";
     }
 
-    parentMenu.addItem(Surge::GUI::toOSCaseForMenu(learntxt),
-                       [this, p, cancellearn, control, idx, isForMacro] {
+    parentMenu.addItem(Surge::GUI::toOSCase(learntxt),
+                       [this, p, cancellearn, control, idx, learn_mode] {
                            if (cancellearn)
                            {
                                hideMidiLearnOverlay();
 
-                               if (isForMacro)
+                               switch (learn_mode)
                                {
-                                   synth->learn_custom = -1;
-                               }
-                               else
-                               {
-                                   synth->learn_param = -1;
+                               case macro_cc:
+                                   synth->learn_macro_from_cc = -1;
+                                   break;
+                               case param_cc:
+                                   synth->learn_param_from_cc = -1;
+                                   break;
+                               case param_note:
+                                   synth->learn_param_from_note = -1;
+                                   break;
+                               default:
+                                   break;
                                }
                            }
                            else
                            {
                                showMidiLearnOverlay(control->asJuceComponent()->getBounds());
 
-                               if (isForMacro)
+                               switch (learn_mode)
                                {
-                                   synth->learn_custom = idx;
-                               }
-                               else
-                               {
-                                   synth->learn_param = idx;
+                               case macro_cc:
+                                   synth->learn_macro_from_cc = idx;
+                                   break;
+                               case param_cc:
+                                   synth->learn_param_from_cc = idx;
+                                   break;
+                               case param_note:
+                                   synth->learn_param_from_note = idx;
+                                   break;
+                               default:
+                                   break;
                                }
                            }
                        });
 
-    if (isForMacro)
+    switch (learn_mode)
+    {
+    case macro_cc:
     {
         if (synth->storage.controllers[idx] >= 0)
         {
-            std::string txt = fmt::format("Clear Learned MIDI ({} ",
-                                          decodeControllerID(synth->storage.controllers[idx]));
+            const int ch = synth->storage.controllers_chan[idx];
+            std::string chtxt = ch == -1 ? "Omni" : fmt::format("Channel {:d}", ch + 1);
+            std::string txt =
+                fmt::format("{} ({}, {})", Surge::GUI::toOSCase("Clear Learned MIDI"),
+                            decodeControllerID(synth->storage.controllers[idx]), chtxt);
 
-            parentMenu.addItem(Surge::GUI::toOSCaseForMenu(txt) +
-                                   midicc_names[synth->storage.controllers[idx]] + ")",
-                               [this, idx]() { synth->storage.controllers[idx] = -1; });
+            parentMenu.addItem(txt, [this, idx]() {
+                synth->storage.controllers[idx] = -1;
+                synth->storage.controllers_chan[idx] = -1;
+
+                synth->storage.getPatch().dawExtraState.customcontrol_map[idx] = -1;
+                synth->storage.getPatch().dawExtraState.customcontrol_chan_map[idx] = -1;
+            });
         }
+
+        break;
     }
-    else
+    case param_cc:
     {
         if (p->midictrl >= 0)
         {
-            std::string txt =
-                fmt::format("Clear Learned MIDI ({} ", decodeControllerID(p->midictrl));
+            const int ch = p->midichan;
+            std::string chtxt = ch == -1 ? "Omni" : fmt::format("Channel {:d}", ch + 1);
+            std::string txt = fmt::format("{} ({}, {})", Surge::GUI::toOSCase("Clear Learned MIDI"),
+                                          decodeControllerID(p->midictrl), chtxt);
 
-            parentMenu.addItem(
-                Surge::GUI::toOSCaseForMenu(txt) + midicc_names[p->midictrl] + ")",
-                [this, p, ptag]() {
-                    if (ptag < n_global_params)
-                    {
-                        p->midictrl = -1;
-                    }
-                    else
-                    {
-                        int a = ptag;
+            parentMenu.addItem(txt, [this, p, ptag]() {
+                if (ptag < n_global_params)
+                {
+                    p->midictrl = -1;
+                    p->midichan = -1;
 
-                        if (ptag >= (n_global_params + n_scene_params))
-                        {
-                            a -= n_scene_params;
-                        }
+                    synth->storage.getPatch().dawExtraState.midictrl_map[ptag] = -1;
+                    synth->storage.getPatch().dawExtraState.midichan_map[ptag] = -1;
+                }
+                else
+                {
+                    synth->storage.getPatch().param_ptr[ptag]->midictrl = -1;
+                    synth->storage.getPatch().param_ptr[ptag]->midichan = -1;
 
-                        synth->storage.getPatch().param_ptr[a]->midictrl = -1;
-                        synth->storage.getPatch().param_ptr[a + n_scene_params]->midictrl = -1;
-                    }
-                });
+                    synth->storage.getPatch().dawExtraState.midictrl_map[ptag] = -1;
+                    synth->storage.getPatch().dawExtraState.midichan_map[ptag] = -1;
+                }
+            });
         }
+
+        break;
+    }
+    case param_note:
+    default:
+        break;
     }
 }
 
@@ -326,7 +462,7 @@ void SurgeGUIEditor::refreshSkin()
     {
         auto db = Surge::GUI::SkinDB::get();
         std::string msg =
-            "Unable to load skin! Reverting the skin to Surge Classic.\n\nSkin error:\n" +
+            "Unable to load skin! Reverting the skin to Surge Classic XT.\n\nSkin error:\n" +
             db->getAndResetErrorString();
         currentSkin = db->defaultSkin(&(synth->storage));
         currentSkin->reloadSkin(bitmapStore);
@@ -354,6 +490,17 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
     if (!editor_open)
     {
         return 0;
+    }
+
+    long tag = control->getTag();
+
+    if ((button.isCommandDown() || button.isMiddleButtonDown()) &&
+        (tag == tag_mp_patch || tag == tag_mp_category))
+    {
+        undoManager()->pushPatch();
+        synth->selectRandomPatch();
+
+        return 1;
     }
 
     SelfModulationGuard modGuard(this);
@@ -395,17 +542,128 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
         }
     }
 
-    long tag = control->getTag();
-
-    if (button.isCommandDown() && (tag == tag_mp_patch || tag == tag_mp_category))
-    {
-        synth->selectRandomPatch();
-        return 1;
-    }
-
     // In these cases just move along with success. RMB does nothing on these switches
-    if (tag == tag_mp_jogfx || tag == tag_mp_category || tag == tag_mp_patch || tag == tag_store)
+    if (tag == tag_mp_jogwaveshape || tag == tag_mp_jogfx || tag == tag_mp_category ||
+        tag == tag_mp_patch || tag == tag_store || tag == tag_action_undo ||
+        tag == tag_action_redo || tag == tag_main_vu_meter)
     {
+        juce::PopupMenu contextMenu;
+        std::string hu, txt;
+
+        switch (tag)
+        {
+        case tag_mp_patch:
+            hu = helpURLForSpecial("patch-navigation");
+            txt = "Patch Navigation";
+            break;
+        case tag_mp_category:
+            hu = helpURLForSpecial("patch-navigation");
+            txt = "Category Navigation";
+            break;
+        case tag_mp_jogfx:
+            hu = helpURLForSpecial("fx-presets");
+            txt = "FX Preset Navigation";
+            break;
+        case tag_mp_jogwaveshape:
+            hu = helpURLForSpecial("waveshaper");
+            txt = "Waveshaper Navigation";
+            break;
+        case tag_action_undo:
+        case tag_action_redo:
+            hu = helpURLForSpecial("action-history");
+            txt = "Action History";
+            break;
+        case tag_store:
+            hu = helpURLForSpecial("save-dialog");
+            txt = "Patch Save";
+            break;
+        case tag_main_vu_meter:
+            hu = helpURLForSpecial("level-meter");
+            txt = "Level Meter";
+            break;
+        default:
+            break;
+        }
+
+        auto tcomp =
+            std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(txt, fullyResolvedHelpURL(hu));
+        tcomp->setSkin(currentSkin, bitmapStore);
+
+        auto hment = tcomp->getTitle();
+
+        contextMenu.addCustomItem(-1, std::move(tcomp), nullptr, hment);
+
+        if (tag == tag_main_vu_meter)
+        {
+            contextMenu.addSeparator();
+
+            makeScopeEntry(contextMenu);
+
+            bool cpumeter = Surge::Storage::getUserDefaultValue(
+                &(synth->storage), Surge::Storage::ShowCPUUsage, false);
+
+            contextMenu.addItem(Surge::GUI::toOSCase("Show CPU Usage"), true, cpumeter,
+                                [this, cpumeter]() {
+                                    Surge::Storage::updateUserDefaultValue(
+                                        &(synth->storage), Surge::Storage::ShowCPUUsage, !cpumeter);
+                                    frame->repaint();
+                                });
+        }
+
+#ifdef DEBUG
+        if (tag == tag_action_undo || tag == tag_action_redo)
+        {
+            auto undoStack = undoManager()->textStack(Surge::GUI::UndoManager::UNDO);
+            auto redoStack = undoManager()->textStack(Surge::GUI::UndoManager::REDO);
+
+            if (!redoStack.empty() || !undoStack.empty())
+            {
+                contextMenu.addSeparator();
+            }
+
+            if (!redoStack.empty())
+            {
+                Surge::Widgets::MenuCenteredBoldLabel::addToMenu(contextMenu, "REDO STACK");
+
+                int nRedo = redoStack.size();
+
+                for (auto s = redoStack.rbegin(); s != redoStack.rend(); ++s)
+                {
+                    contextMenu.addItem(*s, [this, tag, nRedo]() {
+                        for (int q = nRedo; q > 0; --q)
+                        {
+                            undoManager()->redo();
+                        }
+                    });
+
+                    nRedo--;
+                }
+            }
+
+            if (!undoStack.empty())
+            {
+                Surge::Widgets::MenuCenteredBoldLabel::addToMenu(contextMenu, "UNDO STACK");
+
+                int nUndo = 1;
+
+                for (auto s : undoStack)
+                {
+                    contextMenu.addItem(s, [this, tag, nUndo]() {
+                        for (int q = 0; q < nUndo; ++q)
+                        {
+                            undoManager()->undo();
+                        }
+                    });
+
+                    nUndo++;
+                }
+            }
+        }
+#endif
+
+        contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
+                                  Surge::GUI::makeEndHoverCallback(control));
+
         return 1;
     }
 
@@ -447,22 +705,24 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
         return 0;
     }
 
-    if (button.isRightButtonDown() || button.isPopupMenu())
+    if (button.isPopupMenu())
     {
         if (tag == tag_settingsmenu)
         {
             useDevMenu = true;
-            showSettingsMenu(juce::Point<int>{}, control);
+            auto where = frame->getLocalPoint(nullptr, juce::Desktop::getMousePosition());
+            showSettingsMenu(where, control);
             return 1;
         }
 
         if (tag == tag_osc_select)
         {
             auto r = control->asJuceComponent()->getBounds();
-            auto where =
-                frame->getLocalPoint(nullptr, juce::Desktop::getInstance().getMousePosition());
 
-            int a = limit_range((int)((3 * (where.x - r.getX())) / r.getWidth()), 0, 2);
+            int a = current_osc[current_scene];
+            // int a = limit_range((int)((3 * (where.x - r.getX())) / r.getWidth()), 0, 2);
+
+            std::string oscname = "Osc " + std::to_string(a + 1);
 
             auto contextMenu = juce::PopupMenu();
             auto hu = helpURLForSpecial("osc-select");
@@ -474,21 +734,32 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
             auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(
                 fmt::format("Osc {:d}", a + 1), lurl);
             tcomp->setSkin(currentSkin, bitmapStore);
-            contextMenu.addCustomItem(-1, std::move(tcomp));
+            auto hment = tcomp->getTitle();
+
+            contextMenu.addCustomItem(-1, std::move(tcomp), nullptr, hment);
 
             contextMenu.addSeparator();
 
-            contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Copy Oscillator"), [this, a]() {
+            contextMenu.addItem(Surge::GUI::toOSCase("Copy from ") + oscname, [this, a]() {
                 synth->storage.clipboard_copy(cp_osc, current_scene, a);
             });
 
             contextMenu.addItem(
-                Surge::GUI::toOSCaseForMenu("Copy Oscillator with Modulation"),
+                Surge::GUI::toOSCase("Copy from ") + oscname +
+                    Surge::GUI::toOSCase(" with Modulation"),
                 [this, a]() { synth->storage.clipboard_copy(cp_oscmod, current_scene, a); });
 
             if (synth->storage.get_clipboard_type() == cp_osc)
             {
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Paste Oscillator"), [this, a]() {
+                contextMenu.addItem(Surge::GUI::toOSCase("Paste to ") + oscname, [this, a]() {
+                    if (synth->storage.get_clipboard_type() & cp_modulator_target)
+                    {
+                        undoManager()->pushPatch();
+                    }
+                    else
+                    {
+                        undoManager()->pushOscillator(current_scene, a);
+                    }
                     synth->clear_osc_modulation(current_scene, a);
                     synth->storage.clipboard_paste(cp_osc, current_scene, a);
                     synth->storage.getPatch().isDirty = true;
@@ -496,8 +767,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 });
             }
 
-            juce::Point<int> cwhere = control->asJuceComponent()->getBounds().getBottomLeft();
-            contextMenu.showMenuAsync(optionsForPosition(cwhere),
+            contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
                                       Surge::GUI::makeEndHoverCallback(control));
             return 1;
         }
@@ -516,25 +786,38 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
             auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(
                 fmt::format("Scene {:c}", 'A' + current_scene), lurl);
             tcomp->setSkin(currentSkin, bitmapStore);
+            auto hment = tcomp->getTitle();
 
-            contextMenu.addCustomItem(-1, std::move(tcomp));
+            contextMenu.addCustomItem(-1, std::move(tcomp), nullptr, hment);
 
             contextMenu.addSeparator();
 
-            contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Copy Scene"), [this]() {
+            contextMenu.addItem(Surge::GUI::toOSCase("Copy Scene"), [this]() {
                 synth->storage.clipboard_copy(cp_scene, current_scene, -1);
             });
 
-            contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Paste Scene"),
-                                synth->storage.get_clipboard_type() == cp_scene, // enabled
-                                false, [this]() {
-                                    synth->storage.clipboard_paste(cp_scene, current_scene, -1);
-                                    synth->storage.getPatch().isDirty = true;
-                                    queue_refresh = true;
-                                });
+            contextMenu.addItem(
+                Surge::GUI::toOSCase("Paste Scene"),
+                synth->storage.get_clipboard_type() == cp_scene, // enabled
+                false, [this]() {
+                    undoManager()->pushPatch();
+                    synth->storage.clipboard_paste(
+                        cp_scene, current_scene, -1, ms_original,
+                        [this](int p, modsources m) {
+                            auto res = synth->isValidModulation(p, m);
+                            return res;
+                        },
+                        [this](std::unique_ptr<Surge::FxClipboard::Clipboard> &f, int cge) {
+                            Surge::FxClipboard::pasteFx(&(synth->storage), &synth->fxsync[cge], *f);
+                            synth->fx_reload[cge] = true;
+                        });
 
-            juce::Point<int> cwhere = control->asJuceComponent()->getBounds().getBottomLeft();
-            contextMenu.showMenuAsync(optionsForPosition(cwhere),
+                    synth->load_fx_needed = true;
+                    synth->storage.getPatch().isDirty = true;
+                    queue_refresh = true;
+                });
+
+            contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
                                       Surge::GUI::makeEndHoverCallback(control));
             return 1;
         }
@@ -544,28 +827,62 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
     {
         if (lfoDisplay->isMSEG() || lfoDisplay->isFormula())
         {
-            auto tag = lfoDisplay->isMSEG() ? MSEG_EDITOR : FORMULA_EDITOR;
-            lfoDisplay->showLFODisplayPopupMenu(tag);
+            std::string olname = lfoDisplay->isMSEG() ? "MSEG Editor" : "Formula Editor";
+            std::string helpname = lfoDisplay->isMSEG() ? "mseg-editor" : "formula-editor";
+
+            auto msurl = SurgeGUIEditor::helpURLForSpecial(&(synth->storage), helpname);
+            auto hurl = SurgeGUIEditor::fullyResolvedHelpURL(msurl);
+
+            auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(olname, hurl);
+            hmen->setSkin(currentSkin, bitmapStore);
+            auto hment = hmen->getTitle();
+
+            auto contextMenu = juce::PopupMenu();
+            contextMenu.addCustomItem(-1, std::move(hmen), nullptr, hment);
+            contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
+                                      Surge::GUI::makeEndHoverCallback(control));
         }
     }
 
     if (tag == tag_analyzewaveshape)
     {
         auto contextMenu = juce::PopupMenu();
-        auto hu = helpURLForSpecial("waveshaper-preview");
+        auto hu = helpURLForSpecial("waveshaper-analysis");
         auto lurl = hu;
 
         if (lurl != "")
             lurl = fullyResolvedHelpURL(hu);
 
-        auto tcomp = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(
-            Surge::GUI::toOSCaseForMenu("Waveshaper Analysis"), lurl);
+        auto tcomp =
+            std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Waveshaper Analysis", lurl);
+        auto hment = tcomp->getTitle();
 
         tcomp->setSkin(currentSkin, bitmapStore);
-        contextMenu.addCustomItem(-1, std::move(tcomp));
+        contextMenu.addCustomItem(-1, std::move(tcomp), nullptr, hment);
 
-        juce::Point<int> cwhere = control->asJuceComponent()->getBounds().getBottomLeft();
-        contextMenu.showMenuAsync(optionsForPosition(cwhere),
+        contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
+                                  Surge::GUI::makeEndHoverCallback(control));
+
+        return 1;
+    }
+
+    if (tag == tag_analyzefilters)
+    {
+        auto contextMenu = juce::PopupMenu();
+        auto hu = helpURLForSpecial("filter-analysis");
+        auto lurl = hu;
+
+        if (lurl != "")
+            lurl = fullyResolvedHelpURL(hu);
+
+        auto tcomp =
+            std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Filter Analysis", lurl);
+        auto hment = tcomp->getTitle();
+
+        tcomp->setSkin(currentSkin, bitmapStore);
+        contextMenu.addCustomItem(-1, std::move(tcomp), nullptr, hment);
+
+        contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
                                   Surge::GUI::makeEndHoverCallback(control));
 
         return 1;
@@ -576,7 +893,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
         auto *cms = dynamic_cast<Surge::Widgets::ModulationSourceButton *>(control);
         modsources modsource = cms->getCurrentModSource();
 
-        if (button.isRightButtonDown() || button.isPopupMenu())
+        if (button.isPopupMenu())
         {
             juce::PopupMenu contextMenu;
             std::string hu;
@@ -600,15 +917,30 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
             }
 
             auto lurl = hu;
+
             if (lurl != "")
+            {
                 lurl = fullyResolvedHelpURL(lurl);
+            }
+
             auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(
-                modulatorNameWithIndex(current_scene, modsource, modsource_index, false, false),
+                ModulatorName::modulatorNameWithIndex(&synth->storage, current_scene, modsource,
+                                                      modsource_index, false, false),
                 lurl);
             hmen->setSkin(currentSkin, bitmapStore);
-            contextMenu.addCustomItem(-1, std::move(hmen));
+
+            auto hment = hmen->getTitle();
+
+            contextMenu.addCustomItem(-1, std::move(hmen), nullptr, hment);
 
             contextMenu.addSeparator();
+
+            if (modsource == ms_timbre && synth->mpeEnabled)
+            {
+                makeMpeTimbreMenu(contextMenu, false);
+
+                contextMenu.addSeparator();
+            }
 
             int n_total_md = synth->storage.getPatch().param_ptr.size();
             const int max_md = 4096;
@@ -617,8 +949,8 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
             bool cancellearn = false;
             int ccid = 0;
-            int detailedMode = Surge::Storage::getUserDefaultValue(
-                &(this->synth->storage), Surge::Storage::HighPrecisionReadouts, 0);
+            const bool detailedMode =
+                Surge::Storage::getValueDisplayIsHighPrecision(&(this->synth->storage));
 
             // should start at 0, but it started at 1 before
             // there might be a reason but I don't remember why
@@ -644,6 +976,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     }
 
                     bool isGlobal = md < n_global_params;
+                    // TODO: FIX SCENE ASSUMPTION
                     bool isActiveScene = parameter->scene - 1 == activeScene;
 
                     if ((isGlobal || isActiveScene || allScenes) &&
@@ -661,8 +994,9 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             if (first_destination)
                             {
                                 contextMenu.addSeparator();
+
                                 Surge::Widgets::MenuCenteredBoldLabel::addToMenu(contextMenu,
-                                                                                 "TARGETS");
+                                                                                 "MODULATIONS");
                             }
 
                             parameter->get_display_of_modulation_depth(
@@ -671,13 +1005,18 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             char tmptxt[1024]; // leave room for that ubuntu 20.0 error
 
                             std::string targetName;
+
                             if (parameter->ctrlgroup == cg_LFO)
                             {
                                 char pname[TXT_SIZE];
+
                                 parameter->create_fullname(
                                     parameter->get_name(), pname, parameter->ctrlgroup,
                                     parameter->ctrlgroup_entry,
-                                    modulatorName(parameter->ctrlgroup_entry, true).c_str());
+                                    ModulatorName::modulatorName(&synth->storage,
+                                                                 parameter->ctrlgroup_entry, true,
+                                                                 current_scene)
+                                        .c_str());
                                 targetName = pname;
                             }
                             else
@@ -687,10 +1026,8 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                             if (allScenes && (!isGlobal && !isActiveScene))
                             {
-                                char sn[2];
-                                sn[0] = 'A' + (parameter->scene - 1);
-                                sn[1] = 0;
-                                targetName += std::string() + " (Scene " + sn + ")";
+                                targetName +=
+                                    fmt::format(" (Scene {:c})", 'A' + (parameter->scene - 1));
                             }
 
                             auto clearOp = [this, first_destination, md, n_total_md, thisms, modidx,
@@ -734,7 +1071,9 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                     }
                                 }
 
-                                synth->clearModulation(md, thisms, use_scene, modidx);
+                                pushModulationToUndoRedo(md, (modsources)thisms, use_scene, modidx,
+                                                         Surge::GUI::UndoManager::UNDO);
+                                synth->clearModulation(md, thisms, use_scene, modidx, false);
                                 refresh_mod();
 
                                 if (bvf)
@@ -780,6 +1119,8 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                     break;
                                 case Surge::Widgets::ModMenuCustomComponent::MUTE:
                                 {
+                                    pushModulationToUndoRedo(ptag, (modsources)thisms, use_scene,
+                                                             modidx, Surge::GUI::UndoManager::UNDO);
                                     auto is = synth->isModulationMuted(ptag, (modsources)thisms,
                                                                        use_scene, modidx);
 
@@ -795,11 +1136,14 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                 }
                             };
                             auto modMenu = std::make_unique<Surge::Widgets::ModMenuCustomComponent>(
-                                targetName, modtxt, cb);
+                                &synth->storage, targetName, modtxt, cb, true);
                             modMenu->setSkin(currentSkin, bitmapStore);
                             modMenu->setIsMuted(synth->isModulationMuted(
                                 parameter->id, (modsources)thisms, use_scene, modidx));
-                            contextMenu.addCustomItem(-1, std::move(modMenu));
+                            auto mmt = modMenu->getTitle();
+                            auto pm = modMenu->createAccessibleSubMenu();
+                            contextMenu.addCustomItem(-1, std::move(modMenu),
+                                                      pm.get() ? std::move(pm) : nullptr, mmt);
                             first_destination = false;
                             n_md++;
                         }
@@ -810,75 +1154,86 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 {
                     auto use_scene = 0;
                     bool allScenes = true;
+
                     if (this->synth->isModulatorDistinctPerScene(thisms))
                     {
                         allScenes = false;
                         use_scene = current_scene;
                     }
-                    auto allThree = std::make_unique<Surge::Widgets::ModMenuForAllComponent>(
-                        [this, thisms, use_scene, allScenes, n_total_md,
-                         control](Surge::Widgets::ModMenuForAllComponent::AllAction action) {
-                            switch (action)
-                            {
-                            case Surge::Widgets::ModMenuForAllComponent::CLEAR:
-                            {
-                                for (int md = 0; md < n_total_md; md++)
-                                {
-                                    int scene = synth->storage.getPatch().param_ptr[md]->scene;
-                                    if (scene == 0 || allScenes || scene == current_scene + 1)
-                                        for (auto idx : synth->getModulationIndicesBetween(
-                                                 md, thisms, use_scene))
-                                            synth->clearModulation(md, thisms, use_scene, idx);
-                                }
 
-                                refresh_mod();
-
-                                // Also blank out the name and rebuild the UI
-                                if (within_range(ms_ctrl1, thisms,
-                                                 ms_ctrl1 + n_customcontrollers - 1))
-                                {
-                                    int ccid = thisms - ms_ctrl1;
-
-                                    synth->storage.getPatch().CustomControllerLabel[ccid][0] = '-';
-                                    synth->storage.getPatch().CustomControllerLabel[ccid][1] = 0;
-                                    auto msb =
-                                        dynamic_cast<Surge::Widgets::ModulationSourceButton *>(
-                                            control);
-                                    if (msb)
-                                        msb->setCurrentModLabel(
-                                            synth->storage.getPatch().CustomControllerLabel[ccid]);
-                                }
-                                if (control->asJuceComponent())
-                                    control->asJuceComponent()->repaint();
-                                synth->updateDisplay();
-                            }
-                            break;
-                            case Surge::Widgets::ModMenuForAllComponent::UNMUTE:
-                            case Surge::Widgets::ModMenuForAllComponent::MUTE:
+                    auto cb = [this, thisms, use_scene, allScenes, n_total_md,
+                               control](Surge::Widgets::ModMenuForAllComponent::AllAction action) {
+                        switch (action)
+                        {
+                        case Surge::Widgets::ModMenuForAllComponent::CLEAR:
+                        {
+                            for (int md = 0; md < n_total_md; md++)
                             {
-                                bool state =
-                                    (action == Surge::Widgets::ModMenuForAllComponent::MUTE);
-                                for (int md = 0; md < n_total_md; ++md)
-                                {
-                                    for (int sc = 0; sc < n_scenes; ++sc)
+                                int scene = synth->storage.getPatch().param_ptr[md]->scene;
+                                if (scene == 0 || allScenes || scene == current_scene + 1)
+                                    for (auto idx :
+                                         synth->getModulationIndicesBetween(md, thisms, use_scene))
                                     {
-                                        auto indices = synth->getModulationIndicesBetween(
-                                            md, (modsources)thisms, sc);
-                                        for (auto idx : indices)
-                                            synth->muteModulation(md, (modsources)thisms, sc, idx,
-                                                                  state);
+                                        pushModulationToUndoRedo(md, (modsources)thisms, use_scene,
+                                                                 idx,
+                                                                 Surge::GUI::UndoManager::UNDO);
+
+                                        synth->clearModulation(md, thisms, use_scene, idx, false);
                                     }
+                            }
+
+                            refresh_mod();
+
+                            // Also blank out the name and rebuild the UI
+                            if (within_range(ms_ctrl1, thisms, ms_ctrl1 + n_customcontrollers - 1))
+                            {
+                                int ccid = thisms - ms_ctrl1;
+
+                                synth->storage.getPatch().CustomControllerLabel[ccid][0] = '-';
+                                synth->storage.getPatch().CustomControllerLabel[ccid][1] = 0;
+                                auto msb =
+                                    dynamic_cast<Surge::Widgets::ModulationSourceButton *>(control);
+                                if (msb)
+                                    msb->setCurrentModLabel(
+                                        synth->storage.getPatch().CustomControllerLabel[ccid]);
+                            }
+                            if (control->asJuceComponent())
+                                control->asJuceComponent()->repaint();
+                            synth->updateDisplay();
+                        }
+                        break;
+                        case Surge::Widgets::ModMenuForAllComponent::UNMUTE:
+                        case Surge::Widgets::ModMenuForAllComponent::MUTE:
+                        {
+                            bool state = (action == Surge::Widgets::ModMenuForAllComponent::MUTE);
+                            for (int md = 0; md < n_total_md; ++md)
+                            {
+                                for (int sc = 0; sc < n_scenes; ++sc)
+                                {
+                                    auto indices = synth->getModulationIndicesBetween(
+                                        md, (modsources)thisms, sc);
+                                    for (auto idx : indices)
+                                        synth->muteModulation(md, (modsources)thisms, sc, idx,
+                                                              state);
                                 }
                             }
-                            break;
-                            }
-                            refresh_mod();
-                            synth->refresh_editor = true;
-                        });
+                        }
+                        break;
+                        }
+                        refresh_mod();
+                        synth->refresh_editor = true;
+                    };
+
+                    auto allThree = std::make_unique<Surge::Widgets::ModMenuForAllComponent>(
+                        &synth->storage, cb, true);
                     allThree->setSkin(currentSkin, bitmapStore);
-                    contextMenu.addCustomItem(-1, std::move(allThree));
+                    auto at = allThree->getTitle();
+                    auto pm = allThree->createAccessibleSubMenu();
+                    contextMenu.addCustomItem(-1, std::move(allThree),
+                                              pm.get() ? std::move(pm) : nullptr, at);
                 }
             }
+
             int sc = limit_range(synth->storage.getPatch().scene_active.val.i, 0, n_scenes - 1);
 
             // for macros only
@@ -888,7 +1243,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                 ccid = modsource - ms_ctrl1;
 
-                createMIDILearnMenuEntries(contextMenu, true, ccid, control);
+                createMIDILearnMenuEntries(contextMenu, macro_cc, ccid, control);
 
                 auto cms = ((ControllerModulationSource *)synth->storage.getPatch()
                                 .scene[current_scene]
@@ -896,10 +1251,9 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                 contextMenu.addSeparator();
 
-                char vtxt[1024];
-                snprintf(vtxt, 1024, "%s: %.*f %%",
-                         Surge::GUI::toOSCaseForMenu("Edit Value").c_str(), (detailedMode ? 6 : 2),
-                         100 * cms->get_output(0));
+                std::string vtxt =
+                    fmt::format("{:s}: {:.{}f} %", Surge::GUI::toOSCase("Edit Value"),
+                                100 * cms->get_output(0), (detailedMode ? 6 : 2));
                 contextMenu.addItem(vtxt, [this, bvf, modsource]() {
                     promptForUserValueEntry(nullptr, bvf, modsource,
                                             0,  // controllers aren't per scene
@@ -914,8 +1268,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                ->is_bipolar();
 
                 contextMenu.addItem(
-                    Surge::GUI::toOSCaseForMenu("Bipolar Mode"), true, ibp,
-                    [this, control, ccid]() {
+                    Surge::GUI::toOSCase("Bipolar Mode"), true, ibp, [this, control, ccid]() {
                         bool bp = !synth->storage.getPatch()
                                        .scene[current_scene]
                                        .modsources[ms_ctrl1 + ccid]
@@ -937,14 +1290,14 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                         if (msb)
                         {
-                            msb->setBipolar(bp);
+                            msb->setIsBipolar(bp);
                         }
 
                         refresh_mod();
                     });
 
                 contextMenu.addItem(
-                    Surge::GUI::toOSCaseForMenu("Rename Macro..."), [this, control, ccid]() {
+                    Surge::GUI::toOSCase("Rename Macro..."), [this, control, ccid]() {
                         auto msb = dynamic_cast<Surge::Widgets::ModulationSourceButton *>(control);
                         auto pos = control->asJuceComponent()->getBounds().getTopLeft();
 
@@ -958,7 +1311,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
             {
                 auto hamSub = juce::PopupMenu();
                 cms->buildHamburgerMenu(hamSub, true);
-                contextMenu.addSubMenu(Surge::GUI::toOSCaseForMenu("Switch To"), hamSub);
+                contextMenu.addSubMenu(Surge::GUI::toOSCase("Switch To"), hamSub);
                 contextMenu.addSeparator();
             }
 
@@ -969,7 +1322,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
             if (lfo_id >= 0)
             {
                 contextMenu.addItem(
-                    Surge::GUI::toOSCaseForMenu("Rename Modulator..."), [this, control, lfo_id]() {
+                    Surge::GUI::toOSCase("Rename Modulator..."), [this, control, lfo_id]() {
                         auto pos = control->asJuceComponent()->getBounds().getTopLeft();
 
                         openLFORenameDialog(lfo_id, pos, control->asJuceComponent());
@@ -977,57 +1330,62 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                 contextMenu.addSeparator();
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Copy Modulator"),
-                                    [this, sc, lfo_id]() {
-                                        synth->storage.clipboard_copy(cp_lfo, sc, lfo_id);
-                                        mostRecentCopiedMSEGState = msegEditState[sc][lfo_id];
-                                    });
+                contextMenu.addItem(Surge::GUI::toOSCase("Copy Modulator"), [this, sc, lfo_id]() {
+                    synth->storage.clipboard_copy(cp_lfo, sc, lfo_id);
+                    mostRecentCopiedMSEGState = msegEditState[sc][lfo_id];
+                });
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Copy Modulator with Targets"),
+                contextMenu.addItem(Surge::GUI::toOSCase("Copy Modulator with Targets"),
                                     [this, sc, lfo_id]() {
                                         synth->storage.clipboard_copy(cp_lfomod, sc, lfo_id);
                                         mostRecentCopiedMSEGState = msegEditState[sc][lfo_id];
                                     });
 
-                contextMenu.addItem(
-                    Surge::GUI::toOSCaseForMenu("Copy Targets"), [this, sc, lfo_id]() {
-                        synth->storage.clipboard_copy(cp_modulator_target, sc, lfo_id);
-                    });
+                contextMenu.addItem(Surge::GUI::toOSCase("Copy Targets"), [this, sc, lfo_id]() {
+                    synth->storage.clipboard_copy(cp_modulator_target, sc, lfo_id);
+                });
 
                 if (synth->storage.get_clipboard_type() & cp_lfo ||
                     synth->storage.get_clipboard_type() & cp_modulator_target)
                 {
                     auto t = synth->storage.get_clipboard_type();
 
-                    contextMenu.addItem(
-                        Surge::GUI::toOSCaseForMenu("Paste"), [this, sc, t, lfo_id]() {
-                            synth->storage.clipboard_paste(
-                                t, sc, lfo_id, ms_original, [this](int p, modsources m) {
-                                    auto res = synth->isValidModulation(p, m);
-                                    return res;
-                                });
+                    contextMenu.addItem(Surge::GUI::toOSCase("Paste"), [this, sc, t, lfo_id]() {
+                        if (synth->storage.get_clipboard_type() & cp_modulator_target)
+                        {
+                            // Just punt and save the whole patch in this edge case
+                            undoManager()->pushPatch();
+                        }
+                        else
+                        {
+                            undoManager()->pushFullLFO(sc, lfo_id);
+                        }
+                        synth->storage.clipboard_paste(
+                            t, sc, lfo_id, ms_original, [this](int p, modsources m) {
+                                auto res = synth->isValidModulation(p, m);
+                                return res;
+                            });
 
-                            if (t & cp_lfo)
-                            {
-                                msegEditState[sc][lfo_id] = mostRecentCopiedMSEGState;
-                            }
+                        if (t & cp_lfo)
+                        {
+                            msegEditState[sc][lfo_id] = mostRecentCopiedMSEGState;
+                        }
 
-                            synth->storage.getPatch().isDirty = true;
-                            queue_refresh = true;
-                        });
+                        synth->storage.getPatch().isDirty = true;
+                        queue_refresh = true;
+                    });
                 }
             }
             else
             {
-                contextMenu.addItem(
-                    Surge::GUI::toOSCaseForMenu("Copy Targets"), [this, sc, modsource]() {
-                        synth->storage.clipboard_copy(cp_modulator_target, sc, -1, modsource);
-                    });
+                contextMenu.addItem(Surge::GUI::toOSCase("Copy Targets"), [this, sc, modsource]() {
+                    synth->storage.clipboard_copy(cp_modulator_target, sc, -1, modsource);
+                });
 
                 if (synth->storage.get_clipboard_type() & cp_modulator_target)
                 {
-                    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Paste"), [this, sc,
-                                                                               modsource]() {
+                    contextMenu.addItem(Surge::GUI::toOSCase("Paste"), [this, sc, modsource]() {
+                        undoManager()->pushPatch(); // we could do better here
                         synth->storage.clipboard_paste(
                             cp_modulator_target, sc, -1, modsource, [this](int p, modsources m) {
                                 auto res = synth->isValidModulation(p, m);
@@ -1059,7 +1417,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 }
             }
 
-            contextMenu.showMenuAsync(juce::PopupMenu::Options(),
+            contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
                                       Surge::GUI::makeEndHoverCallback(control));
             return 1;
         }
@@ -1112,7 +1470,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
         }
 
         // all the RMB context menus
-        if (button.isRightButtonDown() || button.isPopupMenu())
+        if (button.isPopupMenu())
         {
             juce::Point<int> menuRect{};
 
@@ -1124,14 +1482,24 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 lurl = fullyResolvedHelpURL(helpurl);
             auto hmen =
                 std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(p->get_full_name(), lurl);
+            auto hment = hmen->getTitle();
             hmen->setSkin(currentSkin, bitmapStore);
-            contextMenu.addCustomItem(-1, std::move(hmen));
+            contextMenu.addCustomItem(-1, std::move(hmen), nullptr, hment);
 
             contextMenu.addSeparator();
 
-            char txt[TXT_SIZE], txt2[512];
-            p->get_display(txt);
-            snprintf(txt2, 512, "%s: %s", Surge::GUI::toOSCaseForMenu("Edit Value").c_str(), txt);
+            std::string txt, txt2;
+
+            txt = p->get_display();
+
+            if (!p->temposync)
+            {
+                txt2 = fmt::format("{:s}: {:s}", Surge::GUI::toOSCase("Edit Value"), txt);
+            }
+            else
+            {
+                txt2 = txt;
+            }
 
             if (p->valtype == vt_float)
             {
@@ -1224,8 +1592,8 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                     int ktsw = (currvals == n_oscs);
 
-                    auto txt3 = Surge::GUI::toOSCaseForMenu(tgltxt[ktsw] + " " + parname +
-                                                            " for All Oscillators");
+                    auto txt3 =
+                        Surge::GUI::toOSCase(tgltxt[ktsw] + " " + parname + " for All Oscillators");
 
                     contextMenu.addItem(txt3, [this, ktsw, impactedParms]() {
                         for (auto *p : impactedParms)
@@ -1247,13 +1615,32 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
             {
                 if (p->can_setvalue_from_string())
                 {
-                    contextMenu.addItem(
-                        txt2, [this, p, bvf]() { this->promptForUserValueEntry(p, bvf); });
 
-                    contextMenu.addSeparator();
+                    if (p->ctrltype == ct_midikey_or_channel)
+                    {
+                        auto sc_mode = synth->storage.getPatch().scenemode.val.i;
+
+                        if (sc_mode == sm_split || sc_mode == sm_chsplit)
+                        {
+                            contextMenu.addItem(
+                                txt2, [this, p, bvf]() { this->promptForUserValueEntry(p, bvf); });
+
+                            contextMenu.addSeparator();
+
+                            createMIDILearnMenuEntries(contextMenu, param_note, p->id, control);
+                        }
+                    }
+                    else
+                    {
+                        contextMenu.addItem(
+                            txt2, [this, p, bvf]() { this->promptForUserValueEntry(p, bvf); });
+
+                        contextMenu.addSeparator();
+                    }
 
                     if (p->can_extend_range())
-                        contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Extend Range"), true,
+                    {
+                        contextMenu.addItem(Surge::GUI::toOSCase("Use Decimal Values"), true,
                                             p->extend_range, [this, p, control]() {
                                                 auto wasExtended = p->extend_range;
                                                 p->set_extend_range(!p->extend_range);
@@ -1263,11 +1650,19 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                                         p->val.i = p->val.i / 100;
                                                     else
                                                         p->val.i = p->val.i * 100;
+                                                    // This requires an extra call to
+                                                    // paramChangeToListeners()
+                                                    juceEditor->processor.paramChangeToListeners(p);
                                                 }
 
                                                 synth->storage.getPatch().isDirty = true;
                                                 synth->refresh_editor = true;
+                                                juceEditor->processor.paramChangeToListeners(
+                                                    p, true,
+                                                    juceEditor->processor.SCT_EX_EXTENDRANGE,
+                                                    (float)p->extend_range, .0, .0, "");
                                             });
+                    }
                 }
                 else
                 {
@@ -1391,6 +1786,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                 addTo->addItem(displaytxt, true, isChecked, [this, p, i, tag]() {
                                     float ef =
                                         Parameter::intScaledToFloat(i, p->val_max.i, p->val_min.i);
+                                    undoManager()->pushParameterChange(p->id, p, p->val);
                                     synth->setParameter01(synth->idForParameter(p), ef, false,
                                                           false);
 
@@ -1398,7 +1794,16 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                     {
                                         updateWaveshaperOverlay();
                                     }
-                                    repushAutomationFor(p);
+                                    if (p->ctrlgroup == cg_FILTER)
+                                    {
+                                        if (auto fo = getOverlayIfOpenAs<
+                                                Surge::Overlays::OverlayComponent>(FILTER_ANALYZER))
+                                        {
+                                            fo->forceDataRefresh();
+                                            fo->repaint();
+                                        }
+                                    }
+                                    broadcastPluginAutomationChangeFor(p);
                                     synth->refresh_editor = true;
                                 });
                             }
@@ -1413,19 +1818,39 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     {
                         for (int i = p->val_min.i; i <= max; i += incr)
                         {
-                            char txt[256];
-                            float ef = (1.0f * i - p->val_min.i) / (p->val_max.i - p->val_min.i);
-                            p->get_display(txt, true, ef);
+                            int ii = i;
 
-                            std::string displaytxt = txt;
+                            if (p->ctrltype == ct_scenemode)
+                            {
+                                if (ii == 2)
+                                {
+                                    ii = 3;
+                                }
+                                else if (ii == 3)
+                                {
+                                    ii = 2;
+                                }
+                            }
 
-                            contextMenu.addItem(displaytxt, true, (i == p->val.i),
-                                                [this, ef, p, i]() {
-                                                    synth->setParameter01(synth->idForParameter(p),
-                                                                          ef, false, false);
-                                                    repushAutomationFor(p);
-                                                    synth->refresh_editor = true;
-                                                });
+                            float ef = (1.0f * ii - p->val_min.i) / (p->val_max.i - p->val_min.i);
+
+                            contextMenu.addItem(
+                                p->get_display(true, ef), true, (ii == p->val.i), [this, ef, p]() {
+                                    undoManager()->pushParameterChange(p->id, p, p->val);
+                                    synth->setParameter01(synth->idForParameter(p), ef, false,
+                                                          false);
+                                    if (p->ctrlgroup == cg_FILTER)
+                                    {
+                                        if (auto fo = getOverlayIfOpenAs<
+                                                Surge::Overlays::OverlayComponent>(FILTER_ANALYZER))
+                                        {
+                                            fo->forceDataRefresh();
+                                            fo->repaint();
+                                        }
+                                    }
+                                    broadcastPluginAutomationChangeFor(p);
+                                    synth->refresh_editor = true;
+                                });
                         }
 
                         if (isCombOnSubtype)
@@ -1435,46 +1860,85 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             bool isChecked = synth->storage.getPatch().correctlyTuneCombFilter;
 
                             contextMenu.addItem(
-                                Surge::GUI::toOSCaseForMenu("Precise Tuning"), true, isChecked,
-                                [this]() {
+                                Surge::GUI::toOSCase("Precise Tuning"), true, isChecked, [this]() {
                                     synth->storage.getPatch().correctlyTuneCombFilter =
                                         !synth->storage.getPatch().correctlyTuneCombFilter;
                                     synth->storage.getPatch().isDirty = true;
                                 });
                         }
 
-                        if (p->ctrltype == ct_polymode &&
-                            (p->val.i == pm_mono || p->val.i == pm_mono_st ||
-                             p->val.i == pm_mono_fp || p->val.i == pm_mono_st_fp))
+                        if (p->ctrltype == ct_polymode && (p->val.i == pm_poly))
                         {
-                            std::vector<std::string> labels = {"Last", "High", "Low", "Legacy"};
-                            std::vector<MonoVoicePriorityMode> vals = {
-                                ALWAYS_LATEST, ALWAYS_HIGHEST, ALWAYS_LOWEST,
-                                NOTE_ON_LATEST_RETRIGGER_HIGHEST};
+                            std::vector<std::string> labels = {"Stack Multiple", "Reuse Single"};
+                            std::vector<PolyVoiceRepeatedKeyMode> vals = {NEW_VOICE_EVERY_NOTEON,
+                                                                          ONE_VOICE_PER_KEY};
 
-                            contextMenu.addSectionHeader("NOTE PRIORITY");
+                            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                                contextMenu, "SAME KEY VOICE ALLOCATION");
 
-                            for (int i = 0; i < 4; ++i)
+                            for (int i = 0; i < vals.size(); ++i)
                             {
                                 bool isChecked = (vals[i] == synth->storage.getPatch()
                                                                  .scene[current_scene]
-                                                                 .monoVoicePriorityMode);
-                                contextMenu.addItem(Surge::GUI::toOSCaseForMenu(labels[i]), true,
+                                                                 .polyVoiceRepeatedKeyMode);
+                                contextMenu.addItem(Surge::GUI::toOSCase(labels[i]), true,
                                                     isChecked, [this, isChecked, vals, i]() {
                                                         synth->storage.getPatch()
                                                             .scene[current_scene]
-                                                            .monoVoicePriorityMode = vals[i];
+                                                            .polyVoiceRepeatedKeyMode = vals[i];
                                                         if (!isChecked)
                                                             synth->storage.getPatch().isDirty =
                                                                 true;
                                                     });
                             }
+                        }
 
-                            contextMenu.addSeparator();
+                        if (p->ctrltype == ct_polymode)
+                        {
+                            if (p->val.i == pm_mono || p->val.i == pm_mono_st ||
+                                p->val.i == pm_mono_fp || p->val.i == pm_mono_st_fp)
+                            {
+                                {
+                                    std::vector<std::string> labels = {"Last", "High", "Low",
+                                                                       "Legacy"};
+                                    std::vector<MonoVoicePriorityMode> vals = {
+                                        ALWAYS_LATEST, ALWAYS_HIGHEST, ALWAYS_LOWEST,
+                                        NOTE_ON_LATEST_RETRIGGER_HIGHEST};
 
-                            contextMenu.addSubMenu(
-                                Surge::GUI::toOSCaseForMenu("Sustain Pedal in Mono Mode"),
-                                makeMonoModeOptionsMenu(menuRect, false));
+                                    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                                        contextMenu, "NOTE PRIORITY");
+
+                                    for (int i = 0; i < 4; ++i)
+                                    {
+                                        bool isChecked = (vals[i] == synth->storage.getPatch()
+                                                                         .scene[current_scene]
+                                                                         .monoVoicePriorityMode);
+                                        contextMenu.addItem(
+                                            Surge::GUI::toOSCase(labels[i]), true, isChecked,
+                                            [this, isChecked, vals, i]() {
+                                                undoManager()->pushPatch();
+                                                synth->storage.getPatch()
+                                                    .scene[current_scene]
+                                                    .monoVoicePriorityMode = vals[i];
+                                                if (!isChecked)
+                                                    synth->storage.getPatch().isDirty = true;
+                                            });
+                                    }
+                                }
+
+                                addEnvTrigOptions(contextMenu, current_scene);
+
+                                contextMenu.addSeparator();
+
+                                contextMenu.addSubMenu(
+                                    Surge::GUI::toOSCase("Sustain Pedal in Mono Mode"),
+                                    makeMonoModeOptionsMenu(menuRect, false));
+                            }
+
+                            if (p->val.i == pm_latch)
+                            {
+                                addEnvTrigOptions(contextMenu, current_scene);
+                            }
                         }
                     }
 
@@ -1486,14 +1950,16 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             p->deactivated = !p->deactivated;
                             synth->storage.getPatch().isDirty = true;
                             synth->refresh_editor = true;
+
+                            // output updated value to OSC
+                            juceEditor->processor.paramChangeToListeners(
+                                p, true, juceEditor->processor.SCT_EX_ENABLE,
+                                (float)!p->deactivated, .0, .0, "");
                         });
                     }
                 }
             }
 
-            bool cancellearn = false;
-
-            // Modulation and Learn semantics only apply to vt_float types in Surge right now
             if (p->valtype == vt_float)
             {
                 if (p->can_temposync())
@@ -1504,10 +1970,15 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     }
 
                     contextMenu.addItem(
-                        Surge::GUI::toOSCaseForMenu("Tempo Sync"), true, (p->temposync),
+                        Surge::GUI::toOSCase("Tempo Sync"), true, (p->temposync),
                         [this, p, control]() {
+                            undoManager()->pushParameterChange(p->id, p, p->val);
                             p->temposync = !p->temposync;
                             synth->storage.getPatch().isDirty = true;
+                            // output updated value to OSC
+                            juceEditor->processor.paramChangeToListeners(
+                                p, true, juceEditor->processor.SCT_EX_TEMPOSYNC,
+                                (float)p->temposync, .0, .0, "");
 
                             if (p->temposync)
                             {
@@ -1563,14 +2034,14 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                         if (p->temposync)
                         {
-                            label = Surge::GUI::toOSCaseForMenu("Disable Tempo Sync for All ") +
-                                    prefix + pars;
+                            label =
+                                Surge::GUI::toOSCase("Disable Tempo Sync for All ") + prefix + pars;
                             setTSTo = false;
                         }
                         else
                         {
-                            label = Surge::GUI::toOSCaseForMenu("Enable Tempo Sync for All ") +
-                                    prefix + pars;
+                            label =
+                                Surge::GUI::toOSCase("Enable Tempo Sync for All ") + prefix + pars;
                             setTSTo = true;
                         }
 
@@ -1584,6 +2055,10 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                     pl->ctrlgroup == p->ctrlgroup && pl->can_temposync())
                                 {
                                     pl->temposync = setTSTo;
+                                    // output updated value to OSC
+                                    juceEditor->processor.paramChangeToListeners(
+                                        pl, true, juceEditor->processor.SCT_EX_TEMPOSYNC,
+                                        (float)pl->temposync, .0, .0, "");
 
                                     if (setTSTo)
                                     {
@@ -1601,10 +2076,11 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 switch (p->ctrltype)
                 {
                 case ct_freq_audible_with_tunability:
-                case ct_freq_audible_with_very_low_lowerbound:
+                case ct_freq_audible_very_low_minval:
                     contextMenu.addItem(
-                        Surge::GUI::toOSCaseForMenu("Reset Filter Cutoff To Keytrack Root"),
+                        Surge::GUI::toOSCase("Reset Filter Cutoff To Keytrack Root"),
                         [this, p, control] {
+                            undoManager()->pushParameterChange(p->id, p, p->val);
                             auto kr = this->synth->storage.getPatch()
                                           .scene[current_scene]
                                           .keytrack_root.val.i;
@@ -1628,41 +2104,83 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 {
                     contextMenu.addSeparator();
 
-                    contextMenu.addSectionHeader("OPTIONS");
+                    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                    "OPTIONS");
 
                     bool isChecked = p->porta_constrate;
 
-                    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Constant Rate"), true,
-                                        isChecked,
-                                        [this, p]() { p->porta_constrate = !p->porta_constrate; });
+                    contextMenu.addItem(Surge::GUI::toOSCase("Constant Rate"), true, isChecked,
+                                        [this, p]() {
+                                            undoManager()->pushParameterChange(p->id, p, p->val);
+                                            p->porta_constrate = !p->porta_constrate;
+                                            // output updated value to OSC
+                                            juceEditor->processor.paramChangeToListeners(
+                                                p, true, juceEditor->processor.SCT_EX_PORTA_CONRATE,
+                                                (float)p->porta_constrate, .0, .0, "");
+                                        });
 
                     isChecked = p->porta_gliss;
 
-                    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Glissando"), true, isChecked,
-                                        [this, p]() { p->porta_gliss = !p->porta_gliss; });
+                    contextMenu.addItem(Surge::GUI::toOSCase("Glissando"), true, isChecked,
+                                        [this, p]() {
+                                            undoManager()->pushParameterChange(p->id, p, p->val);
+                                            p->porta_gliss = !p->porta_gliss;
+                                            // output updated value to OSC
+                                            juceEditor->processor.paramChangeToListeners(
+                                                p, true, juceEditor->processor.SCT_EX_PORTA_GLISS,
+                                                (float)p->porta_gliss, .0, .0, "");
+                                        });
 
                     isChecked = p->porta_retrigger;
 
-                    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Retrigger at Scale Degrees"),
-                                        true, isChecked,
-                                        [this, p]() { p->porta_retrigger = !p->porta_retrigger; });
+                    contextMenu.addItem(Surge::GUI::toOSCase("Retrigger at Scale Degrees"), true,
+                                        isChecked, [this, p]() {
+                                            undoManager()->pushParameterChange(p->id, p, p->val);
+                                            p->porta_retrigger = !p->porta_retrigger;
+                                            // output updated value to OSC
+                                            juceEditor->processor.paramChangeToListeners(
+                                                p, true, juceEditor->processor.SCT_EX_PORTA_RETRIG,
+                                                (float)p->porta_retrigger, .0, .0, "");
+                                        });
 
-                    contextMenu.addSectionHeader("CURVE");
+                    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                    "CURVE");
 
                     isChecked = (p->porta_curve == -1);
 
-                    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Logarithmic"), true, isChecked,
-                                        [this, p]() { p->porta_curve = -1; });
+                    contextMenu.addItem(Surge::GUI::toOSCase("Logarithmic"), true, isChecked,
+                                        [this, p]() {
+                                            undoManager()->pushParameterChange(p->id, p, p->val);
+                                            p->porta_curve = -1;
+                                            // output updated value to OSC
+                                            juceEditor->processor.paramChangeToListeners(
+                                                p, true, juceEditor->processor.SCT_EX_PORTA_CURVE,
+                                                (float)p->porta_curve, .0, .0, "");
+                                        });
 
                     isChecked = (p->porta_curve == 0);
 
-                    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Linear"), true, isChecked,
-                                        [this, p]() { p->porta_curve = 0; });
+                    contextMenu.addItem(Surge::GUI::toOSCase("Linear"), true, isChecked,
+                                        [this, p]() {
+                                            undoManager()->pushParameterChange(p->id, p, p->val);
+                                            p->porta_curve = 0;
+                                            // output updated value to OSC
+                                            juceEditor->processor.paramChangeToListeners(
+                                                p, true, juceEditor->processor.SCT_EX_PORTA_CURVE,
+                                                (float)p->porta_curve, .0, .0, "");
+                                        });
 
                     isChecked = (p->porta_curve == 1);
 
-                    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Exponential"), true, isChecked,
-                                        [this, p]() { p->porta_curve = 1; });
+                    contextMenu.addItem(Surge::GUI::toOSCase("Exponential"), true, isChecked,
+                                        [this, p]() {
+                                            undoManager()->pushParameterChange(p->id, p, p->val);
+                                            p->porta_curve = 1;
+                                            // output updated value to OSC
+                                            juceEditor->processor.paramChangeToListeners(
+                                                p, true, juceEditor->processor.SCT_EX_PORTA_CURVE,
+                                                (float)p->porta_curve, .0, .0, "");
+                                        });
                 }
 
                 if (p->has_deformoptions())
@@ -1673,7 +2191,8 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     {
                         contextMenu.addSeparator();
 
-                        contextMenu.addSectionHeader("SLOPE");
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                        "SLOPE");
 
                         for (int i = 0; i < synth->n_hpBQ; i++)
                         {
@@ -1682,7 +2201,8 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             bool isChecked = p->deform_type == i;
 
                             contextMenu.addItem(title, true, isChecked, [this, p, i]() {
-                                p->deform_type = i;
+                                undoManager()->pushParameterChange(p->id, p, p->val);
+                                update_deform_type(p, i);
                                 synth->storage.getPatch().isDirty = true;
                             });
                         }
@@ -1699,28 +2219,31 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                         {
                             contextMenu.addSeparator();
 
-                            contextMenu.addSectionHeader("DEFORM");
+                            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                                contextMenu, "DEFORM");
 
                             for (int i = 0; i < lt_num_deforms[lfodata->shape.val.i]; i++)
                             {
                                 std::string title = fmt::format("Type {:d}", (i + 1));
-
                                 bool isChecked = p->deform_type == i;
 
-                                contextMenu.addItem(Surge::GUI::toOSCaseForMenu(title), true,
-                                                    isChecked, [this, isChecked, p, i]() {
-                                                        p->deform_type = i;
-                                                        if (!isChecked)
-                                                        {
-                                                            synth->storage.getPatch().isDirty =
-                                                                true;
-                                                        }
+                                contextMenu.addItem(
+                                    Surge::GUI::toOSCase(title), true, isChecked,
+                                    [this, isChecked, p, i]() {
+                                        if (p->deform_type != i)
+                                            undoManager()->pushParameterChange(p->id, p, p->val);
+                                        update_deform_type(p, i);
 
-                                                        if (frame)
-                                                        {
-                                                            frame->repaint();
-                                                        }
-                                                    });
+                                        if (!isChecked)
+                                        {
+                                            synth->storage.getPatch().isDirty = true;
+                                        }
+
+                                        if (frame)
+                                        {
+                                            frame->repaint();
+                                        }
+                                    });
                             }
                         }
 
@@ -1736,32 +2259,34 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                         bool isChecked = false;
 
-                        contextMenu.addSectionHeader("WAVEFORM");
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                        "WAVEFORM");
 
                         for (int m : waves)
                         {
                             isChecked = ((p->deform_type & 0x0F) == m);
 
-                            contextMenu.addItem(mo_multitype_names[m], true, isChecked,
-                                                [this, isChecked, p, m]() {
-                                                    p->deform_type = (p->deform_type & 0xFFF0) | m;
-                                                    if (!isChecked)
-                                                    {
-                                                        synth->storage.getPatch().isDirty = true;
-                                                    }
-                                                    synth->refresh_editor = true;
-                                                });
+                            contextMenu.addItem(
+                                mo_multitype_names[m], true, isChecked, [this, isChecked, p, m]() {
+                                    undoManager()->pushParameterChange(p->id, p, p->val);
+                                    update_deform_type(p, (p->deform_type & 0xFFF0) | m);
+                                    if (!isChecked)
+                                    {
+                                        synth->storage.getPatch().isDirty = true;
+                                    }
+                                    synth->refresh_editor = true;
+                                });
                         }
 
                         int subosc = ModernOscillator::mo_submask::mo_subone;
 
                         isChecked = (p->deform_type & subosc);
 
-                        contextMenu.addSectionHeader("SUB-OSCILLATOR");
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                            contextMenu, "SUB-OSCILLATOR");
 
                         contextMenu.addItem(
-                            Surge::GUI::toOSCaseForMenu("Enabled"), true, isChecked,
-                            [p, subosc, this]() {
+                            Surge::GUI::toOSCase("Enabled"), true, isChecked, [p, subosc, this]() {
                                 auto usubosc = subosc;
                                 int usubskipsync =
                                     p->deform_type & ModernOscillator::mo_submask::mo_subskipsync;
@@ -1771,7 +2296,9 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                     usubosc = 0;
                                 }
 
-                                p->deform_type = (p->deform_type & 0xF) | usubosc | usubskipsync;
+                                undoManager()->pushParameterChange(p->id, p, p->val);
+                                update_deform_type(p,
+                                                   (p->deform_type & 0xF) | usubosc | usubskipsync);
 
                                 synth->storage.getPatch().isDirty = true;
                                 synth->refresh_editor = true;
@@ -1782,7 +2309,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                         isChecked = (p->deform_type & subskipsync);
 
                         contextMenu.addItem(
-                            Surge::GUI::toOSCaseForMenu("Disable Hardsync"), true, isChecked,
+                            Surge::GUI::toOSCase("Disable Hardsync"), true, isChecked,
                             [p, subskipsync, this]() {
                                 auto usubskipsync = subskipsync;
                                 int usubosc =
@@ -1793,7 +2320,9 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                     usubskipsync = 0;
                                 }
 
-                                p->deform_type = (p->deform_type & 0xF) | usubosc | usubskipsync;
+                                undoManager()->pushParameterChange(p->id, p, p->val);
+                                update_deform_type(p,
+                                                   (p->deform_type & 0xF) | usubosc | usubskipsync);
 
                                 synth->storage.getPatch().isDirty = true;
                                 synth->refresh_editor = true;
@@ -1807,14 +2336,14 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                         bool isChecked = (p->deform_type);
 
-                        contextMenu.addItem(
-                            Surge::GUI::toOSCaseForMenu("Ramp Not Masked Above Threshold"), true,
-                            isChecked, [p, this]() {
-                                p->deform_type = !p->deform_type;
-
-                                synth->storage.getPatch().isDirty = true;
-                                synth->refresh_editor = true;
-                            });
+                        contextMenu.addItem(Surge::GUI::toOSCase("Ramp Not Masked Above Threshold"),
+                                            true, isChecked, [p, this]() {
+                                                undoManager()->pushParameterChange(p->id, p,
+                                                                                   p->val);
+                                                update_deform_type(p, !p->deform_type);
+                                                synth->storage.getPatch().isDirty = true;
+                                                synth->refresh_editor = true;
+                                            });
 
                         break;
                     }
@@ -1825,15 +2354,19 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                         std::vector<std::string> tapeHysteresisModes = {"Normal", "Medium", "High",
                                                                         "Very High"};
 
-                        contextMenu.addSectionHeader("PRECISION");
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                            contextMenu, "PRECISION");
 
                         for (int i = 0; i < tapeHysteresisModes.size(); ++i)
                         {
                             bool isChecked = p->deform_type == i;
 
-                            contextMenu.addItem(Surge::GUI::toOSCaseForMenu(tapeHysteresisModes[i]),
-                                                true, isChecked, [this, isChecked, p, i]() {
-                                                    p->deform_type = i;
+                            contextMenu.addItem(Surge::GUI::toOSCase(tapeHysteresisModes[i]), true,
+                                                isChecked, [this, isChecked, p, i]() {
+                                                    if (p->deform_type != i)
+                                                        undoManager()->pushParameterChange(p->id, p,
+                                                                                           p->val);
+                                                    update_deform_type(p, i);
                                                     if (!isChecked)
                                                     {
                                                         synth->storage.getPatch().isDirty = true;
@@ -1847,19 +2380,23 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     {
                         contextMenu.addSeparator();
 
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                        "LIMITING");
+
                         std::vector<std::string> fbClipModes = {
                             "Disabled (DANGER!)", "Soft Clip (cubic)", "Soft Clip (tanh)",
                             "Hard Clip at 0 dBFS", "Hard Clip at +18 dBFS"};
-
-                        contextMenu.addSectionHeader("LIMITING");
 
                         for (int i = 0; i < fbClipModes.size(); ++i)
                         {
                             bool isChecked = p->deform_type == i;
 
-                            contextMenu.addItem(Surge::GUI::toOSCaseForMenu(fbClipModes[i]), true,
+                            contextMenu.addItem(Surge::GUI::toOSCase(fbClipModes[i]), true,
                                                 isChecked, [this, isChecked, p, i]() {
-                                                    p->deform_type = i;
+                                                    if (p->deform_type != i)
+                                                        undoManager()->pushParameterChange(p->id, p,
+                                                                                           p->val);
+                                                    update_deform_type(p, i);
                                                     if (!isChecked)
                                                     {
                                                         synth->storage.getPatch().isDirty = true;
@@ -1871,6 +2408,235 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                         break;
                     }
+                    case ct_percent_with_string_deform_hook:
+                    case ct_percent_bipolar_with_string_filter_hook:
+                    {
+                        auto addDef = [this, p,
+                                       &contextMenu](StringOscillator::deform_modes dm,
+                                                     StringOscillator::deform_modes allMode,
+                                                     const std::string &lb) {
+                            auto ticked = p->deform_type & dm;
+
+                            contextMenu.addItem(
+                                Surge::GUI::toOSCase(lb), true, ticked,
+                                [this, p, allMode, dm, ticked] {
+                                    if (!ticked)
+                                    {
+                                        undoManager()->pushParameterChange(p->id, p, p->val);
+                                        update_deform_type(p, (p->deform_type & ~allMode) | dm);
+                                        synth->storage.getPatch().isDirty = true;
+                                        frame->repaint();
+                                    }
+                                });
+                        };
+
+                        if (p->ctrltype == ct_percent_with_string_deform_hook)
+                        {
+                            contextMenu.addSeparator();
+
+                            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                                contextMenu, "OVERSAMPLING");
+
+                            addDef(StringOscillator::os_onex, StringOscillator::os_all, "1x");
+                            addDef(StringOscillator::os_twox, StringOscillator::os_all, "2x");
+
+                            contextMenu.addSeparator();
+
+                            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                                contextMenu, "INTERPOLATION");
+
+                            addDef(StringOscillator::interp_zoh, StringOscillator::interp_all,
+                                   Surge::GUI::toOSCase("Zero Order Hold"));
+                            addDef(StringOscillator::interp_lin, StringOscillator::interp_all,
+                                   "Linear");
+                            addDef(StringOscillator::interp_sinc, StringOscillator::interp_all,
+                                   "Sinc");
+                        }
+
+                        if (p->ctrltype == ct_percent_bipolar_with_string_filter_hook)
+                        {
+                            contextMenu.addSeparator();
+
+                            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                                contextMenu, "STIFFNESS FILTER");
+
+                            addDef(StringOscillator::filter_fixed, StringOscillator::filter_all,
+                                   "Static");
+                            addDef(StringOscillator::filter_keytrack, StringOscillator::filter_all,
+                                   "Keytracked");
+                            addDef(StringOscillator::filter_compensate,
+                                   StringOscillator::filter_all,
+                                   Surge::GUI::toOSCase("Keytracked and Pitch Compensated"));
+                        }
+
+                        break;
+                    }
+                    case ct_noise_color:
+                    {
+                        if (synth->storage.getPatch()
+                                .scene[current_scene]
+                                .filterblock_configuration.val.i == fc_wide)
+                        {
+                            contextMenu.addSeparator();
+                            auto dt = p->deform_type;
+
+                            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                                contextMenu, "NOISE GENERATOR MODE");
+
+                            contextMenu.addItem(
+                                "Mono", true, dt == NoiseColorChannels::MONO, [this, p]() {
+                                    undoManager()->pushParameterChange(p->id, p, p->val);
+                                    update_deform_type(p, NoiseColorChannels::MONO);
+                                    synth->storage.getPatch().isDirty = true;
+                                    frame->repaint();
+                                });
+                            contextMenu.addItem(
+                                "Stereo", true, dt == NoiseColorChannels::STEREO, [this, p]() {
+                                    undoManager()->pushParameterChange(p->id, p, p->val);
+                                    update_deform_type(p, NoiseColorChannels::STEREO);
+                                    synth->storage.getPatch().isDirty = true;
+                                    frame->repaint();
+                                });
+                        }
+
+                        break;
+                    }
+                    case ct_amplitude_ringmod:
+                    {
+                        contextMenu.addSeparator();
+
+                        auto dt = p->deform_type;
+                        auto addEntry = [this, dt, p](juce::PopupMenu &menu, CombinatorMode cxm) {
+                            menu.addItem(Surge::GUI::toOSCase(combinator_mode_names[cxm]), true,
+                                         dt == cxm, [this, p, cxm]() {
+                                             undoManager()->pushParameterChange(p->id, p, p->val);
+                                             update_deform_type(p, cxm);
+                                             synth->storage.getPatch().isDirty = true;
+                                             frame->repaint();
+                                         });
+                        };
+
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                            contextMenu, "COMBINATOR MODE");
+
+                        addEntry(contextMenu, cxm_ring);
+                        addEntry(contextMenu, cxm_cxor43_0);
+
+                        contextMenu.addItem(
+                            -1, Surge::GUI::toOSCase("Scale-Invariant Linear Modulation:"), false,
+                            false);
+
+                        auto subMenu = juce::PopupMenu();
+
+                        addEntry(subMenu, cxm_cxor43_1);
+                        addEntry(subMenu, cxm_cxor43_2);
+                        addEntry(subMenu, cxm_cxor43_3_legacy);
+                        addEntry(subMenu, cxm_cxor43_4_legacy);
+                        addEntry(subMenu, cxm_cxor43_3);
+                        addEntry(subMenu, cxm_cxor43_4);
+
+                        contextMenu.addSubMenu(Surge::GUI::toOSCase("4 Gradients"), subMenu);
+
+                        subMenu.clear();
+
+                        addEntry(subMenu, cxm_cxor93_0);
+                        addEntry(subMenu, cxm_cxor93_1);
+                        addEntry(subMenu, cxm_cxor93_2);
+                        addEntry(subMenu, cxm_cxor93_3);
+                        addEntry(subMenu, cxm_cxor93_4);
+
+                        contextMenu.addSubMenu(Surge::GUI::toOSCase("9 Gradients"), subMenu);
+                        break;
+                    }
+                    case ct_bonsai_bass_boost:
+                    {
+                        contextMenu.addSeparator();
+                        auto dt = p->deform_type;
+
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                        "ROUTING");
+
+                        contextMenu.addItem("Mono", true, dt == 1, [this, p]() {
+                            undoManager()->pushParameterChange(p->id, p, p->val);
+                            update_deform_type(p, 1);
+                            synth->storage.getPatch().isDirty = true;
+                            frame->repaint();
+                        });
+                        contextMenu.addItem("Stereo", true, dt == 0, [this, p]() {
+                            undoManager()->pushParameterChange(p->id, p, p->val);
+                            update_deform_type(p, 0);
+                            synth->storage.getPatch().isDirty = true;
+                            frame->repaint();
+                        });
+                        contextMenu.addSeparator();
+
+                        break;
+                    }
+                    case ct_osc_feedback_negative:
+                    {
+                        contextMenu.addSeparator();
+                        auto dt = p->deform_type;
+
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                            contextMenu, "FEEDBACK TYPE");
+
+                        contextMenu.addItem("Surge", true, dt == 0, [this, p]() {
+                            undoManager()->pushParameterChange(p->id, p, p->val);
+                            update_deform_type(p, 0);
+                            synth->storage.getPatch().isDirty = true;
+                            frame->repaint();
+                        });
+                        contextMenu.addItem("Vintage FM", true, dt == 1, [this, p]() {
+                            undoManager()->pushParameterChange(p->id, p, p->val);
+                            update_deform_type(p, 1);
+                            synth->storage.getPatch().isDirty = true;
+                            frame->repaint();
+                        });
+                        contextMenu.addSeparator();
+
+                        break;
+                    }
+                    case ct_envtime_deformable:
+                    {
+                        contextMenu.addSeparator();
+
+                        auto dt = p->deform_type;
+
+                        contextMenu.addItem(Surge::GUI::toOSCase("Freeze Release at Sustain Level"),
+                                            true, dt > 0, [this, p]() {
+                                                undoManager()->pushParameterChange(p->id, p,
+                                                                                   p->val);
+                                                update_deform_type(p, !p->deform_type);
+                                                synth->storage.getPatch().isDirty = true;
+                                                frame->repaint();
+                                            });
+
+                        contextMenu.addSeparator();
+
+                        break;
+                    }
+                    case ct_countedset_percent_extendable_wtdeform:
+                    {
+                        contextMenu.addSeparator();
+                        auto dt = p->deform_type;
+
+                        contextMenu.addItem(
+                            Surge::GUI::toOSCase("Legacy Mode"), true,
+                            dt == (int)WavetableOscillator::FeatureDeform::XT_134_EARLIER,
+                            [this, p, dt]() {
+                                undoManager()->pushParameterChange(p->id, p, p->val);
+                                auto ov =
+                                    (dt == WavetableOscillator::FeatureDeform::XT_134_EARLIER
+                                         ? WavetableOscillator::FeatureDeform::XT_14
+                                         : WavetableOscillator::FeatureDeform::XT_134_EARLIER);
+                                update_deform_type(p, (int)ov);
+                                synth->storage.getPatch().isDirty = true;
+                                frame->repaint();
+                            });
+
+                        contextMenu.addSeparator();
+                    }
+                    break;
                     default:
                     {
                         break;
@@ -1893,16 +2659,22 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             txt = "Modulation Extends into Self-oscillation";
                             break;
                         case ct_freq_audible_with_tunability:
-                        case ct_freq_audible_with_very_low_lowerbound:
+                        case ct_freq_audible_very_low_minval:
                         {
                             auto hasmts = synth->storage.oddsound_mts_client &&
-                                          synth->storage.oddsound_mts_active;
+                                          synth->storage.oddsound_mts_active_as_client;
 
                             std::string tuningmode = hasmts ? "MTS" : "SCL/KBM";
 
                             txt = "Apply " + tuningmode + " Tuning to Filter Cutoff";
                             visible =
                                 synth->storage.tuningApplicationMode == SurgeStorage::RETUNE_ALL;
+                            break;
+                        }
+                        case ct_pitch_extendable_very_low_minval:
+                        {
+                            // yep folks - we're abusing extend_range to do absolutable! :)
+                            txt = "Absolute";
                             break;
                         }
                         case ct_percent_oscdrift:
@@ -1912,6 +2684,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             txt = "Pan Main and Auxiliary Signals";
                             break;
                         case ct_countedset_percent_extendable:
+                        case ct_countedset_percent_extendable_wtdeform:
                             txt = "Continuous Morph";
                             break;
                         default:
@@ -1922,12 +2695,18 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                         {
                             bool isChecked = p->extend_range;
 
-                            contextMenu.addItem(Surge::GUI::toOSCaseForMenu(txt), enable, isChecked,
-                                                [this, p]() {
-                                                    p->set_extend_range(!p->extend_range);
-                                                    synth->storage.getPatch().isDirty = true;
-                                                    synth->refresh_editor = true;
-                                                });
+                            contextMenu.addItem(
+                                Surge::GUI::toOSCase(txt), enable, isChecked, [this, p]() {
+                                    undoManager()->pushParameterChange(p->id, p, p->val);
+                                    p->set_extend_range(!p->extend_range);
+                                    synth->storage.getPatch().isDirty = true;
+                                    synth->refresh_editor = true;
+
+                                    // output updated value to OSC
+                                    juceEditor->processor.paramChangeToListeners(
+                                        p, true, juceEditor->processor.SCT_EX_EXTENDRANGE,
+                                        (float)p->extend_range, .0, .0, "");
+                                });
                         }
                     }
                 }
@@ -1937,29 +2716,37 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     bool isChecked = p->absolute;
 
                     contextMenu.addItem("Absolute", true, isChecked, [this, p]() {
+                        undoManager()->pushParameterChange(p->id, p, p->val);
+
                         p->absolute = !p->absolute;
                         synth->storage.getPatch().isDirty = true;
 
                         // FIXME : What's a better aprpoach?
                         if (p->ctrltype == ct_fmratio)
                         {
-                            char txt[256], ntxt[256];
-                            memset(txt, 0, 256);
-                            strxcpy(txt, p->get_name(), 256);
+                            char txt[TXT_SIZE];
+                            std::string ntxt;
+                            memset(txt, 0, TXT_SIZE);
+                            strxcpy(txt, p->get_name(), TXT_SIZE);
 
                             if (p->absolute)
                             {
-                                snprintf(ntxt, 256, "M%c Frequency", txt[1]);
+                                ntxt = fmt::format("M{:c} Frequency", txt[1]);
                             }
                             else
                             {
-                                snprintf(ntxt, 256, "M%c Ratio",
-                                         txt[1]); // Ladies and gentlemen, MC Ratio!
+                                // Ladies and gentlemen, MC Ratio!
+                                ntxt = fmt::format("M{:c} Ratio", txt[1]);
                             }
 
-                            p->set_name(ntxt);
+                            p->set_name(ntxt.c_str());
                             synth->refresh_editor = true;
                         }
+
+                        // output updated value to OSC
+                        juceEditor->processor.paramChangeToListeners(
+                            p, true, juceEditor->processor.SCT_EX_ABSOLUTE, (float)p->absolute, .0,
+                            .0, "");
                     });
                 }
 
@@ -1976,22 +2763,36 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                     bool isChecked = q->deactivated;
 
-                    if (q->ctrltype == ct_envtime_linkable_delay)
+                    switch (q->ctrltype)
                     {
-                        txt = Surge::GUI::toOSCaseForMenu("Link to Left Channel");
-                    }
-                    else
+                    case ct_envtime_linkable_delay:
+                        txt = Surge::GUI::toOSCase("Link to Left Channel");
+                        break;
+                    case ct_amplitude_clipper:
+                        txt = Surge::GUI::toOSCase(
+                            fmt::format("Mute Scene {:c}", 'A' + (p->scene - 1)));
+                        break;
+                    default:
                     {
                         isChecked = !isChecked;
-                        txt = Surge::GUI::toOSCaseForMenu("Enabled");
+                        txt = Surge::GUI::toOSCase("Enabled");
+                    }
+                    break;
                     }
 
                     contextMenu.addSeparator();
 
-                    contextMenu.addItem(txt, true, isChecked, [this, q]() {
+                    contextMenu.addItem(txt, true, isChecked, [this, q, p]() {
+                        undoManager()->pushParameterChange(q->id, q, q->val);
+
                         q->deactivated = !q->deactivated;
                         synth->storage.getPatch().isDirty = true;
                         synth->refresh_editor = true;
+
+                        // output updated value to OSC
+                        juceEditor->processor.paramChangeToListeners(
+                            p, true, juceEditor->processor.SCT_EX_ENABLE, (float)!p->deactivated,
+                            .0, .0, "");
                     });
                 }
 
@@ -2017,6 +2818,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                         }
                     }
                 }
+
                 if (n_ms)
                 {
                     contextMenu.addSeparator();
@@ -2043,18 +2845,18 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             {
                                 if (synth->isActiveModulation(ptag, ms, sc, modidx))
                                 {
-                                    char modtxt[256];
+                                    char modtxt[TXT_SIZE];
 
                                     p->get_display_of_modulation_depth(
                                         modtxt, synth->getModDepth(ptag, ms, sc, modidx),
                                         synth->isBipolarModulation(ms), Parameter::Menu);
 
-                                    std::string srctxt = modulatorNameWithIndex(
-                                        current_scene, ms, modidx, true, showScene);
+                                    std::string srctxt = ModulatorName::modulatorNameWithIndex(
+                                        &synth->storage, sc, ms, modidx, true, showScene);
 
                                     auto comp =
                                         std::make_unique<Surge::Widgets::ModMenuCustomComponent>(
-                                            srctxt, modtxt,
+                                            &synth->storage, srctxt, modtxt,
                                             [this, ptag, p, sc, bvf, ms, modidx](
                                                 Surge::Widgets::ModMenuCustomComponent::OpType ot) {
                                                 switch (ot)
@@ -2067,8 +2869,11 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                                 break;
                                                 case Surge::Widgets::ModMenuCustomComponent::CLEAR:
                                                 {
+                                                    pushModulationToUndoRedo(
+                                                        ptag, (modsources)ms, sc, modidx,
+                                                        Surge::GUI::UndoManager::UNDO);
                                                     synth->clearModulation(ptag, (modsources)ms, sc,
-                                                                           modidx);
+                                                                           modidx, false);
                                                     refresh_mod();
                                                     synth->storage.getPatch().isDirty = true;
                                                     synth->refresh_editor = true;
@@ -2076,6 +2881,9 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                                 break;
                                                 case Surge::Widgets::ModMenuCustomComponent::MUTE:
                                                 {
+                                                    pushModulationToUndoRedo(
+                                                        ptag, (modsources)ms, sc, modidx,
+                                                        Surge::GUI::UndoManager::UNDO);
                                                     auto is = synth->isModulationMuted(
                                                         ptag, (modsources)ms, sc, modidx);
 
@@ -2088,10 +2896,14 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                                                 break;
                                                 }
                                             });
+                                    auto comptitle = comp->getTitle();
                                     comp->setSkin(currentSkin, bitmapStore);
                                     comp->setIsMuted(
                                         synth->isModulationMuted(ptag, (modsources)ms, sc, modidx));
-                                    contextMenu.addCustomItem(-1, std::move(comp));
+                                    auto pm = comp->createAccessibleSubMenu();
+                                    contextMenu.addCustomItem(-1, std::move(comp),
+                                                              pm.get() ? std::move(pm) : nullptr,
+                                                              comptitle);
                                 }
                             }
                         }
@@ -2099,56 +2911,66 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                     if (n_ms > 1)
                     {
+                        auto cb = [this,
+                                   ptag](Surge::Widgets::ModMenuForAllComponent::AllAction action) {
+                            switch (action)
+                            {
+                            case Surge::Widgets::ModMenuForAllComponent::CLEAR:
+                            {
+                                for (int ms = 1; ms < n_modsources; ms++)
+                                {
+                                    for (int sc = 0; sc < n_scenes; ++sc)
+                                    {
+                                        auto indices = synth->getModulationIndicesBetween(
+                                            ptag, (modsources)ms, sc);
+                                        for (auto idx : indices)
+                                        {
+                                            pushModulationToUndoRedo(ptag, (modsources)ms, sc, idx,
+                                                                     Surge::GUI::UndoManager::UNDO);
+
+                                            synth->clearModulation(ptag, (modsources)ms, sc, idx,
+                                                                   false);
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                            case Surge::Widgets::ModMenuForAllComponent::UNMUTE:
+                            case Surge::Widgets::ModMenuForAllComponent::MUTE:
+                            {
+                                bool state =
+                                    (action == Surge::Widgets::ModMenuForAllComponent::MUTE);
+                                for (int ms = 1; ms < n_modsources; ms++)
+                                {
+                                    for (int sc = 0; sc < n_scenes; ++sc)
+                                    {
+                                        auto indices = synth->getModulationIndicesBetween(
+                                            ptag, (modsources)ms, sc);
+                                        for (auto idx : indices)
+                                            synth->muteModulation(ptag, (modsources)ms, sc, idx,
+                                                                  state);
+                                    }
+                                }
+                            }
+                            break;
+                            }
+                            refresh_mod();
+                            synth->refresh_editor = true;
+                        };
                         auto allThree = std::make_unique<Surge::Widgets::ModMenuForAllComponent>(
-                            [this, ptag](Surge::Widgets::ModMenuForAllComponent::AllAction action) {
-                                switch (action)
-                                {
-                                case Surge::Widgets::ModMenuForAllComponent::CLEAR:
-                                {
-                                    for (int ms = 1; ms < n_modsources; ms++)
-                                    {
-                                        for (int sc = 0; sc < n_scenes; ++sc)
-                                        {
-                                            auto indices = synth->getModulationIndicesBetween(
-                                                ptag, (modsources)ms, sc);
-                                            for (auto idx : indices)
-                                                synth->clearModulation(ptag, (modsources)ms, sc,
-                                                                       idx, false);
-                                        }
-                                    }
-                                }
-                                break;
-                                case Surge::Widgets::ModMenuForAllComponent::UNMUTE:
-                                case Surge::Widgets::ModMenuForAllComponent::MUTE:
-                                {
-                                    bool state =
-                                        (action == Surge::Widgets::ModMenuForAllComponent::MUTE);
-                                    for (int ms = 1; ms < n_modsources; ms++)
-                                    {
-                                        for (int sc = 0; sc < n_scenes; ++sc)
-                                        {
-                                            auto indices = synth->getModulationIndicesBetween(
-                                                ptag, (modsources)ms, sc);
-                                            for (auto idx : indices)
-                                                synth->muteModulation(ptag, (modsources)ms, sc, idx,
-                                                                      state);
-                                        }
-                                    }
-                                }
-                                break;
-                                }
-                                refresh_mod();
-                                synth->refresh_editor = true;
-                            });
+                            &synth->storage, cb);
                         allThree->setSkin(currentSkin, bitmapStore);
-                        contextMenu.addCustomItem(-1, std::move(allThree));
+                        auto comptitle = allThree->getTitle();
+                        auto pm = allThree->createAccessibleSubMenu();
+                        contextMenu.addCustomItem(-1, std::move(allThree),
+                                                  pm.get() ? std::move(pm) : nullptr, comptitle);
                     }
                 }
 
                 contextMenu.addSeparator();
 
-                // see if we have any modulators that are unassigned, then create "Add
-                // Modulation from..." menu
+                // see if we have any modulators that are unassigned,
+                // then create "Add Modulation from..." menu
                 if (n_ms != n_modsources)
                 {
                     auto addModSub = juce::PopupMenu();
@@ -2171,10 +2993,11 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                         if ((!synth->isAnyActiveModulation(ptag, ms, current_scene) || isIndexed) &&
                             synth->isValidModulation(ptag, ms))
                         {
-                            char tmptxt[512];
-                            sprintf(tmptxt, "%s", modulatorName(ms, false).c_str());
+                            auto modName = ModulatorName::modulatorName(&synth->storage, ms, false,
+                                                                        current_scene);
 
                             auto *popMenu = &addMIDISub;
+                            int modIdx = -1;
 
                             // TODO FIXME: Try not to be gross!
                             if (ms >= ms_ctrl1 && ms <= ms_ctrl1 + n_customcontrollers - 1)
@@ -2184,10 +3007,12 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             else if (ms >= ms_lfo1 && ms <= ms_lfo1 + n_lfos_voice - 1)
                             {
                                 popMenu = &addVLFOSub;
+                                modIdx = ms;
                             }
                             else if (ms >= ms_slfo1 && ms <= ms_slfo1 + n_lfos_scene - 1)
                             {
                                 popMenu = &addSLFOSub;
+                                modIdx = ms;
                             }
                             else if (ms >= ms_ampeg && ms <= ms_filtereg)
                             {
@@ -2202,20 +3027,27 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                             {
                                 int maxidx = synth->getMaxModulationIndex(current_scene, ms);
                                 auto subm = juce::PopupMenu();
+
                                 for (int i = 0; i < maxidx; ++i)
                                 {
-                                    auto subn =
-                                        modulatorNameWithIndex(current_scene, ms, i, false, false);
-                                    subm.addItem(subn, [this, p, bvf, ms, i]() {
+                                    auto subn = ModulatorName::modulatorNameWithIndex(
+                                        &synth->storage, current_scene, ms, i, false, false);
+
+                                    subm.addItem(subn, [this, p, bvf, ms, modIdx, i]() {
                                         this->promptForUserValueEntry(p, bvf, ms, current_scene, i);
+
+                                        typeinParamEditor->activateModsourceAfterEnter = modIdx;
                                     });
                                 }
-                                popMenu->addSubMenu(tmptxt, subm);
+
+                                popMenu->addSubMenu(modName, subm);
                             }
                             else
                             {
-                                popMenu->addItem(tmptxt, [this, p, bvf, ms]() {
+                                popMenu->addItem(modName, [this, p, bvf, ms, modIdx]() {
                                     this->promptForUserValueEntry(p, bvf, ms, current_scene, 0);
+
+                                    typeinParamEditor->activateModsourceAfterEnter = modIdx;
                                 });
                             }
                         }
@@ -2253,14 +3085,14 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                     if (addModSub.getNumItems() > 0)
                     {
-                        contextMenu.addSubMenu(Surge::GUI::toOSCaseForMenu("Add Modulation from"),
+                        contextMenu.addSubMenu(Surge::GUI::toOSCase("Add Modulation from"),
                                                addModSub);
                     }
                 }
 
                 contextMenu.addSeparator();
 
-                createMIDILearnMenuEntries(contextMenu, false, p->id, control);
+                createMIDILearnMenuEntries(contextMenu, param_cc, p->id, control);
 
             } // end vt_float if statement
 
@@ -2274,7 +3106,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 bool isChecked = (synth->storage.sceneHardclipMode[current_scene] ==
                                   SurgeStorage::BYPASS_HARDCLIP);
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu(sc + " Hard Clip Disabled"), true,
+                contextMenu.addItem(Surge::GUI::toOSCase(sc + " Hard Clip Disabled"), true,
                                     isChecked, [this, isChecked]() {
                                         synth->storage.sceneHardclipMode[current_scene] =
                                             SurgeStorage::BYPASS_HARDCLIP;
@@ -2285,7 +3117,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 isChecked = (synth->storage.sceneHardclipMode[current_scene] ==
                              SurgeStorage::HARDCLIP_TO_0DBFS);
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu(sc + " Hard Clip at 0 dBFS"), true,
+                contextMenu.addItem(Surge::GUI::toOSCase(sc + " Hard Clip at 0 dBFS"), true,
                                     isChecked, [this, isChecked]() {
                                         synth->storage.sceneHardclipMode[current_scene] =
                                             SurgeStorage::HARDCLIP_TO_0DBFS;
@@ -2296,8 +3128,8 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 isChecked = (synth->storage.sceneHardclipMode[current_scene] ==
                              SurgeStorage::HARDCLIP_TO_18DBFS);
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu(sc + " Hard Clip at +18 dBFS"),
-                                    true, isChecked, [this, isChecked]() {
+                contextMenu.addItem(Surge::GUI::toOSCase(sc + " Hard Clip at +18 dBFS"), true,
+                                    isChecked, [this, isChecked]() {
                                         synth->storage.sceneHardclipMode[current_scene] =
                                             SurgeStorage::HARDCLIP_TO_18DBFS;
                                         if (!isChecked)
@@ -2312,7 +3144,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 // FIXME - add unified menu here
                 bool isChecked = (synth->storage.hardclipMode == SurgeStorage::BYPASS_HARDCLIP);
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Global Hard Clip Disabled"), true,
+                contextMenu.addItem(Surge::GUI::toOSCase("Global Hard Clip Disabled"), true,
                                     isChecked, [this, isChecked]() {
                                         synth->storage.hardclipMode = SurgeStorage::BYPASS_HARDCLIP;
                                         if (!isChecked)
@@ -2321,7 +3153,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                 isChecked = (synth->storage.hardclipMode == SurgeStorage::HARDCLIP_TO_0DBFS);
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Global Hard Clip at 0 dBFS"), true,
+                contextMenu.addItem(Surge::GUI::toOSCase("Global Hard Clip at 0 dBFS"), true,
                                     isChecked, [this, isChecked]() {
                                         synth->storage.hardclipMode =
                                             SurgeStorage::HARDCLIP_TO_0DBFS;
@@ -2331,13 +3163,28 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
 
                 isChecked = (synth->storage.hardclipMode == SurgeStorage::HARDCLIP_TO_18DBFS);
 
-                contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Global Hard Clip at +18 dBFS"),
-                                    true, isChecked, [this, isChecked]() {
+                contextMenu.addItem(Surge::GUI::toOSCase("Global Hard Clip at +18 dBFS"), true,
+                                    isChecked, [this, isChecked]() {
                                         synth->storage.hardclipMode =
                                             SurgeStorage::HARDCLIP_TO_18DBFS;
                                         if (!isChecked)
                                             synth->storage.getPatch().isDirty = true;
                                     });
+            }
+
+            if (synth->storage.oscReceiving)
+            {
+                contextMenu.addSeparator();
+
+                auto oscName = p->get_osc_name();
+
+                auto i =
+                    juce::PopupMenu::Item(fmt::format("OSC: {}", oscName))
+                        .setAction(
+                            [oscName]() { juce::SystemClipboard::copyTextToClipboard(oscName); })
+                        .setColour(currentSkin->getColor(Colors::PopupMenu::Text).withAlpha(0.75f));
+
+                contextMenu.addItem(i);
             }
 
             auto jpm = juceEditor->hostMenuFor(p);
@@ -2354,7 +3201,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                 }
             }
 
-            contextMenu.showMenuAsync(juce::PopupMenu::Options(),
+            contextMenu.showMenuAsync(popupMenuOptions(control->asJuceComponent(), false),
                                       Surge::GUI::makeEndHoverCallback(control));
             return 1;
         }
@@ -2373,14 +3220,17 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     use_scene = current_scene;
                 }
 
-                synth->clearModulation(ptag, thisms, use_scene, modsource_index);
+                pushModulationToUndoRedo(ptag, (modsources)thisms, use_scene, modsource_index,
+                                         Surge::GUI::UndoManager::UNDO);
+
+                synth->clearModulation(ptag, thisms, use_scene, modsource_index, false);
                 auto ctrms = dynamic_cast<Surge::Widgets::ModulatableControlInterface *>(control);
                 jassert(ctrms);
 
                 if (ctrms)
                 {
                     ctrms->setModValue(
-                        synth->getModulation(p->id, thisms, use_scene, modsource_index));
+                        synth->getModDepth01(p->id, thisms, use_scene, modsource_index));
                     ctrms->setModulationState(
                         synth->isModDestUsed(p->id),
                         synth->isActiveModulation(p->id, thisms, use_scene, modsource_index));
@@ -2407,7 +3257,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
                     */
                     break;
                 case ct_freq_audible_with_tunability:
-                case ct_freq_audible_with_very_low_lowerbound:
+                case ct_freq_audible_very_low_minval:
                 {
                     if (p->extend_range || button.isAltDown())
                     {
@@ -2460,7 +3310,7 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
             }
         }
         // exclusive mute/solo in the mixer
-        else if (button.isCommandDown())
+        else if (button.isCommandDown() || button.isMiddleButtonDown())
         {
             if (p->ctrltype == ct_bool_mute)
             {
@@ -2512,6 +3362,13 @@ int32_t SurgeGUIEditor::controlModifierClicked(Surge::GUI::IComponentTagValue *c
     return 0;
 }
 
+void SurgeGUIEditor::update_deform_type(Parameter *p, int type)
+{
+    p->deform_type = type;
+    juceEditor->processor.paramChangeToListeners(p, true, juceEditor->processor.SCT_EX_DEFORM,
+                                                 (float)type, .0, .0, "");
+}
+
 void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
 {
     if (!frame)
@@ -2556,11 +3413,24 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
         return;
     }
 
+    if (tag == tag_action_undo)
+    {
+        undoManager()->undo();
+        juce::Timer::callAfterDelay(25, [control]() { control->setValue(0); });
+        return;
+    }
+
+    if (tag == tag_action_redo)
+    {
+        undoManager()->redo();
+        juce::Timer::callAfterDelay(25, [control]() { control->setValue(0); });
+        return;
+    }
+
     if (tag == tag_lfo_menu)
     {
         control->setValue(0);
-        juce::Point<int> where{};
-
+        juce::Point<int> where = control->asJuceComponent()->getBounds().getBottomLeft();
         showLfoMenu(where, control);
         return;
     }
@@ -2572,11 +3442,14 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
     }
     if (tag == tag_status_tune)
     {
-        toggleTuning();
         if (synth->storage.isStandardTuningAndHasNoToggle())
         {
             juce::Point<int> where = control->asJuceComponent()->getBounds().getBottomLeft();
             showTuningMenu(where, control);
+        }
+        else
+        {
+            toggleTuning();
         }
 
         return;
@@ -2611,10 +3484,11 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
         if (cms->getMouseMode() == Surge::Widgets::ModulationSourceButton::DRAG_VALUE)
         {
             int t = (tag - tag_mod_source0);
-            ((ControllerModulationSource *)synth->storage.getPatch()
-                 .scene[current_scene]
-                 .modsources[t])
-                ->set_target01(control->getValue(), false);
+            auto cmsrc = ((ControllerModulationSource *)synth->storage.getPatch()
+                              .scene[current_scene]
+                              .modsources[t]);
+            undoManager()->pushMacroChange(t - ms_ctrl1, cmsrc->get_target01(0));
+            cmsrc->set_target01(control->getValue(), false);
             synth->getParent()->surgeMacroUpdated(t - ms_ctrl1, control->getValue());
 
             lfoDisplay->repaint();
@@ -2641,19 +3515,19 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                     else
                         mod_editor = false;
                     queue_refresh = true;
-                    refresh_mod();
+                    needsModUpdate = true;
                     break;
                 case 1:
                     modsource = newsource;
                     modsource_index = newindex;
                     mod_editor = true;
-                    refresh_mod();
+                    needsModUpdate = true;
                     break;
                 case 2:
                     modsource = newsource;
                     modsource_index = newindex;
                     mod_editor = false;
-                    refresh_mod();
+                    needsModUpdate = true;
                     break;
                 };
             }
@@ -2682,6 +3556,9 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                 if ((state & 3) == 0)
                     queue_refresh = true;
                 refresh_mod();
+
+                if (lfoRateSlider)
+                    lfoRateSlider->grabKeyboardFocus();
             }
             else if (cms->getMouseMode() == Surge::Widgets::ModulationSourceButton::HAMBURGER)
             {
@@ -2693,10 +3570,7 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
             else if (cms->getMouseMode() == Surge::Widgets::ModulationSourceButton::CLICK_ARROW ||
                      cms->getMouseMode() == Surge::Widgets::ModulationSourceButton::CTRL_CLICK)
             {
-                change_mod_view = false;
-                mod_editor = true;
-                modsource = newsource;
-                modsource_index = newindex;
+                change_mod_view = true;
                 refresh_mod();
             }
 
@@ -2811,10 +3685,25 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                 csc->setIntegerValue(0);
             else
                 csc->setIntegerValue(a + 1);
+
+            auto h = csc->getAccessibilityHandler();
+            if (h)
+                h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
         }
+
+        SurgeSynthesizer::ID ptagid;
+        if (synth->fromSynthSideId(tag - start_paramtags, ptagid))
+            synth->sendParameterAutomation(ptagid, synth->getParameter01(ptagid));
+
         if (bvf)
             bvf->repaint();
         synth->switch_toggled_queued = true;
+
+        if (auto fo = getOverlayIfOpenAs<Surge::Overlays::OverlayComponent>(FILTER_ANALYZER))
+        {
+            fo->forceDataRefresh();
+            fo->repaint();
+        }
         return;
     }
 
@@ -2841,6 +3730,7 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
     break;
     case tag_mp_category:
     {
+        undoManager()->pushPatch();
         closeOverlay(SAVE_PATCH);
 
         loadPatchWithDirtyCheck((control->getValue() > 0.5f), true);
@@ -2850,6 +3740,7 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
     break;
     case tag_mp_patch:
     {
+        undoManager()->pushPatch();
         closeOverlay(SAVE_PATCH);
 
         auto insideCategory = Surge::Storage::getUserDefaultValue(
@@ -2882,6 +3773,14 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
         }
     }
     break;
+    case tag_analyzefilters:
+    {
+        if (control->getValue() > 0.5f)
+            showOverlay(FILTER_ANALYZER);
+        else
+            closeOverlay(FILTER_ANALYZER);
+    }
+    break;
     case tag_mp_jogfx:
     {
         if (fxMenu)
@@ -2912,9 +3811,9 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
     break;
     case tag_settingsmenu:
     {
-        juce::Point<int> menuPoint;
+        juce::Point<int> cwhere = control->asJuceComponent()->getBounds().getTopLeft();
         useDevMenu = false;
-        showSettingsMenu(menuPoint, control);
+        showSettingsMenu(cwhere, control);
     }
     break;
     case tag_osc_select:
@@ -2930,8 +3829,17 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
         if (!fxc)
             return;
 
+        int cur_bitmask = synth->storage.getPatch().fx_disable.val.i;
         int d = fxc->getDeactivatedBitmask();
-        synth->fx_suspend_bitmask = synth->storage.getPatch().fx_disable.val.i ^ d;
+        synth->fx_suspend_bitmask = cur_bitmask ^ d;
+
+        if (d != cur_bitmask)
+        {
+            juceEditor->processor.paramChangeToListeners(nullptr, true,
+                                                         juceEditor->processor.SCT_FX_DEACT,
+                                                         (float)cur_bitmask, (float)d, .0, "");
+        }
+
         synth->storage.getPatch().fx_disable.val.i = d;
         fxc->setDeactivatedBitmask(d);
 
@@ -2951,7 +3859,7 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
     {
         synth->switch_toggled_queued = true;
         queue_refresh = true;
-        synth->processThreadunsafeOperations();
+        synth->processAudioThreadOpsWhenAudioEngineUnavailable();
         return;
     }
     break;
@@ -2960,7 +3868,7 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
         synth->load_fx_needed = true;
         // queue_refresh = true;
         synth->fx_reload[limit_range(current_fx, 0, n_fx_slots - 1)] = true;
-        synth->processThreadunsafeOperations();
+        synth->processAudioThreadOpsWhenAudioEngineUnavailable();
 
         if (fxMenu && fxMenu->selectedIdx >= 0)
         {
@@ -2978,7 +3886,18 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
     break;
     case tag_store:
     {
-        showOverlay(SAVE_PATCH);
+        showOverlay(SurgeGUIEditor::SAVE_PATCH, [this](Surge::Overlays::OverlayComponent *co) {
+            auto psd = dynamic_cast<Surge::Overlays::PatchStoreDialog *>(co);
+
+            if (!psd)
+            {
+                return;
+            }
+
+            psd->setShowTagsField(juce::ModifierKeys::currentModifiers.isAltDown());
+            psd->setShowFactoryOverwrite(juce::ModifierKeys::currentModifiers.isShiftDown() &&
+                                         juce::ModifierKeys::currentModifiers.isAltDown());
+        });
     }
     break;
 
@@ -2989,20 +3908,30 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
         if ((ptag >= 0) && (ptag < synth->storage.getPatch().param_ptr.size()))
         {
             Parameter *p = synth->storage.getPatch().param_ptr[ptag];
-            if (p->is_nonlocal_on_change())
-                frame->repaint();
 
-            char pname[256], pdisp[128], txt[128];
+            // The UI reset the value; means soft takeover needs to try again
+            p->miditakeover_status = sts_waiting_for_first_look;
+
+            if (p->is_nonlocal_on_change())
+            {
+                frame->repaint();
+            }
+
+            char pname[TXT_SIZE], pdisp[TXT_SIZE], txt[TXT_SIZE];
             bool modulate = false;
 
-            // This allows us to turn on and off the editor. FIXME mseg check it
+            // This allows us to turn on and off the editor. FIXME MSEG check it
             if (p->ctrltype == ct_lfotype)
+            {
                 synth->refresh_editor = true;
+            }
 
             auto mci = dynamic_cast<Surge::Widgets::ModulatableControlInterface *>(control);
+
             if (modsource && mod_editor && synth->isValidModulation(p->id, modsource) && mci)
             {
                 modsources thisms = modsource;
+
                 if (gui_modsrc[modsource])
                 {
                     auto cms = gui_modsrc[modsource].get();
@@ -3011,8 +3940,10 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                         thisms = cms->getAlternate();
 #endif
                 }
+
                 bool quantize_mod = juce::ModifierKeys::currentModifiers.isCommandDown();
                 float mv = mci->getModValue();
+
                 if (quantize_mod)
                 {
                     mv = p->quantize_modulation(mv);
@@ -3020,9 +3951,11 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                 }
 
                 auto use_scene = 0;
+
                 if (this->synth->isModulatorDistinctPerScene(thisms))
                     use_scene = current_scene;
-                synth->setModulation(ptag, thisms, use_scene, modsource_index, mv);
+
+                synth->setModDepth01(ptag, thisms, use_scene, modsource_index, mv);
 
                 mci->setModulationState(
                     synth->isModDestUsed(p->id),
@@ -3030,10 +3963,19 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                 mci->setIsModulationBipolar(synth->isBipolarModulation(thisms));
 
                 SurgeSynthesizer::ID ptagid;
+
                 if (synth->fromSynthSideId(ptag, ptagid))
+                {
                     synth->getParameterName(ptagid, txt);
-                sprintf(pname, "%s -> %s", modulatorName(thisms, true).c_str(), txt);
+                }
+
+                snprintf(pname, TXT_SIZE - 1, "%s -> %s",
+                         ModulatorName::modulatorName(&synth->storage, thisms, true, current_scene)
+                             .c_str(),
+                         txt);
+
                 ModulationDisplayInfoWindowStrings mss;
+
                 p->get_display_of_modulation_depth(
                     pdisp, synth->getModDepth(ptag, thisms, use_scene, modsource_index),
                     synth->isBipolarModulation(thisms), Parameter::InfoWindow, &mss);
@@ -3057,30 +3999,35 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
             else
             {
                 auto val = control->getValue();
+
                 if (p->ctrltype == ct_scenemode)
                 {
 
-                    /*
-                    ** See the comment in the constructor of ct_scenemode above
-                    */
+                    // See the comment in the constructor of ct_scenemode above
                     auto cs2 = dynamic_cast<Surge::Widgets::MultiSwitch *>(control);
                     auto im = 0;
+
                     if (cs2)
                     {
                         im = cs2->getIntegerValue();
+
                         if (im == 3)
+                        {
                             im = 2;
+                        }
                         else if (im == 2)
+                        {
                             im = 3;
+                        }
+
                         val = Parameter::intScaledToFloat(im, n_scene_modes - 1);
                     }
 
-                    /*
-                    ** Now I also need to toggle the split key state
-                    */
+                    // Now I also need to toggle the split key state
                     if (splitpointControl)
                     {
                         int cm = splitpointControl->getControlMode();
+
                         if (im == sm_chsplit && cm != Surge::Skin::Parameters::MIDICHANNEL_FROM_127)
                         {
                             splitpointControl->setControlMode(
@@ -3095,6 +4042,12 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                         else if ((im == sm_single || im == sm_dual) &&
                                  cm != Surge::Skin::Parameters::NONE)
                         {
+                            // drop out of MIDI learn mode if active
+                            if (synth->learn_param_from_note > -1)
+                            {
+                                synth->learn_param_from_note = -1;
+                            }
+
                             splitpointControl->setControlMode(Surge::Skin::Parameters::NONE);
                             splitpointControl->repaint();
                         }
@@ -3104,8 +4057,10 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                 bool force_integer = juce::ModifierKeys::currentModifiers.isCommandDown();
                 SurgeSynthesizer::ID ptagid;
                 synth->fromSynthSideId(ptag, ptagid);
+
                 if (synth->setParameter01(ptagid, val, false, force_integer))
                 {
+                    synth->sendParameterAutomation(ptagid, synth->getParameter01(ptagid));
                     queue_refresh = true;
                     return;
                 }
@@ -3114,16 +4069,27 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                     synth->sendParameterAutomation(ptagid, synth->getParameter01(ptagid));
 
                     auto mci = dynamic_cast<Surge::Widgets::ModulatableControlInterface *>(control);
+
                     if (mci)
+                    {
                         mci->setQuantitizedDisplayValue(p->get_value_f01());
+                    }
                     else if (bvf)
+                    {
                         bvf->repaint();
+                    }
+
                     synth->getParameterName(ptagid, pname);
                     synth->getParameterDisplay(ptagid, pdisp);
-                    char pdispalt[256];
+
+                    char pdispalt[TXT_SIZE];
+
                     synth->getParameterDisplayAlt(ptagid, pdispalt);
+
                     if (p->ctrltype == ct_polymode)
+                    {
                         modulate = true;
+                    }
                 }
 
                 if (p->ctrltype == ct_bool_unipolar || p->ctrltype == ct_lfotype)
@@ -3134,6 +4100,7 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
 
                 // Finally we may have to update the modulation editor
                 auto me = getOverlayIfOpenAs<Surge::Overlays::ModulationEditor>(MODULATION_EDITOR);
+
                 if (me)
                 {
                     me->updateParameterById(ptagid);
@@ -3151,9 +4118,17 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
                 {
                     lfoDisplay->repaint();
                 }
-                for (auto &el : juceOverlays)
+                for (const auto &[olTag, ol] : juceOverlays)
                 {
-                    el.second->repaint();
+                    auto olpc = ol->getPrimaryChildAsOverlayComponent();
+                    if (olpc && olpc->shouldRepaintOnParamChange(getPatch(), p))
+                    {
+                        olpc->repaint();
+                    }
+                    else
+                    {
+                        // std::cout << "Skipping param repaint" << std::endl;
+                    }
                 }
             }
             if (p->ctrltype == ct_filtertype)
@@ -3187,6 +4162,10 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
             ((Surge::Widgets::Switch *)filtersubtype[idx])->setIntegerValue(0);
         else
             ((Surge::Widgets::Switch *)filtersubtype[idx])->setIntegerValue(a + 1);
+
+        auto h = ((Surge::Widgets::Switch *)filtersubtype[idx])->getAccessibilityHandler();
+        if (h)
+            h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
 
         filtersubtype[idx]->repaint();
     }
@@ -3250,17 +4229,28 @@ void SurgeGUIEditor::valueChanged(Surge::GUI::IComponentTagValue *control)
         }
     }
 
-    if (tag == waveshaperSelector->getTag())
+    // TODO: If we hide waveshaper selector in skin but leave jog and analysis button in,
+    // they stop working. Is there any way around this?
+    if (waveshaperSelector && tag == waveshaperSelector->getTag())
     {
         updateWaveshaperOverlay();
     }
 }
 
-bool SurgeGUIEditor::setParameterFromString(Parameter *p, const std::string &s)
+bool SurgeGUIEditor::setParameterFromString(Parameter *p, const std::string &s, std::string &errMsg)
 {
     auto v = p->get_value_f01();
-    if (p && p->set_value_from_string(s))
+
+    if (p)
     {
+        undoManager()->pushParameterChange(p->id, p, p->val);
+        auto res = p->set_value_from_string(s, errMsg);
+
+        if (!res)
+        {
+            return false;
+        }
+
         if (v != p->get_value_f01())
             synth->storage.getPatch().isDirty = true;
         repushAutomationFor(p);
@@ -3272,13 +4262,13 @@ bool SurgeGUIEditor::setParameterFromString(Parameter *p, const std::string &s)
 }
 bool SurgeGUIEditor::setParameterModulationFromString(Parameter *p, modsources ms,
                                                       int modsourceScene, int modidx,
-                                                      const std::string &s)
+                                                      const std::string &s, std::string &errMsg)
 {
     if (!p || ms == 0)
         return false;
 
     bool valid = false;
-    auto mv = p->calculate_modulation_value_from_string(s, valid);
+    auto mv = p->calculate_modulation_value_from_string(s, errMsg, valid);
 
     if (!valid)
     {
@@ -3286,7 +4276,11 @@ bool SurgeGUIEditor::setParameterModulationFromString(Parameter *p, modsources m
     }
     else
     {
-        synth->setModulation(p->id, ms, modsourceScene, modidx, mv);
+        undoManager()->pushModulationChange(
+            p->id, p, ms, modsourceScene, modidx,
+            synth->getModDepth01(p->id, ms, modsourceScene, modidx),
+            synth->isModulationMuted(p->id, ms, modsourceScene, modidx));
+        synth->setModDepth01(p->id, ms, modsourceScene, modidx, mv);
         synth->refresh_editor = true;
         synth->storage.getPatch().isDirty = true;
     }
@@ -3307,6 +4301,10 @@ bool SurgeGUIEditor::setControlFromString(modsources ms, const std::string &s)
     auto cms = ((ControllerModulationSource *)synth->storage.getPatch()
                     .scene[current_scene]
                     .modsources[ms]);
+    if (ms >= ms_ctrl1 && ms <= ms_ctrl8)
+    {
+        undoManager()->pushMacroChange(ms - ms_ctrl1, cms->get_target01(0));
+    }
     bool bp = cms->is_bipolar();
     float val = std::atof(s.c_str()) / 100.0;
     if ((bp && val >= -1 && val <= 1) || (val >= 0 && val <= 1))

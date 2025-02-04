@@ -1,6 +1,24 @@
 /*
-** Various support of skin operations for the rudimentary skinning engine
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SkinSupport.h"
 #include "SurgeStorage.h"
@@ -123,8 +141,15 @@ void SkinDB::rescanForSkins(SurgeStorage *storage)
                     {
                         if (fs::is_directory(d))
                         {
-                            alldirs.push_back(d);
-                            workStack.push_back(d);
+                            if (d.path().filename().u8string() == "__MACOSX")
+                            {
+                                // skip this mis-zipped dir. See #7249
+                            }
+                            else
+                            {
+                                alldirs.push_back(d);
+                                workStack.push_back(d);
+                            }
                         }
                     }
                 }
@@ -145,12 +170,8 @@ void SkinDB::rescanForSkins(SurgeStorage *storage)
             if (name.length() >= ending.length() &&
                 0 == name.compare(name.length() - ending.length(), ending.length(), ending))
             {
-#if WINDOWS
-                char sep = '\\';
-#else
-                char sep = '/';
-#endif
-                auto sp = name.rfind(sep);
+                auto sp = name.rfind(PATH_SEPARATOR);
+
                 if (sp == std::string::npos)
                 {
                 }
@@ -161,7 +182,7 @@ void SkinDB::rescanForSkins(SurgeStorage *storage)
                     Entry e;
                     e.rootType = rt;
                     e.root = path;
-                    e.name = lo + sep;
+                    e.name = lo + PATH_SEPARATOR;
                     if (e.name.find("default.surge-skin") != std::string::npos && rt == FACTORY &&
                         defaultSkinEntry.name == "")
                     {
@@ -177,8 +198,8 @@ void SkinDB::rescanForSkins(SurgeStorage *storage)
     {
         auto memSkin = Entry();
         memSkin.rootType = MEMORY;
-        memSkin.name = "In Memory Default";
-        memSkin.displayName = "In Memory Default";
+        memSkin.name = MemorySkinName;
+        memSkin.displayName = MemorySkinName;
         memSkin.category = "";
         memSkin.root = "";
         availableSkins.push_back(memSkin);
@@ -196,8 +217,15 @@ void SkinDB::rescanForSkins(SurgeStorage *storage)
 
         if (!doc.LoadFile(string_to_path(x)))
         {
-            e.displayName = e.name + " (parse error)";
-            e.parseable = false;
+            if (e.rootType == MEMORY)
+            {
+                // e.displayName += " (in memory)";
+            }
+            else
+            {
+                e.displayName = e.name + " (parse error)";
+                e.parseable = false;
+            }
             continue;
         }
         e.parseable = true;
@@ -245,6 +273,7 @@ Skin::Skin(const std::string &root, const std::string &name) : root(root), name(
     // std::cout << "Constructing a skin " << _D(root) << _D(name) << _D(instances) << std::endl;
     imageStringToId = createIdNameMap();
     imageAllowedIds = allowedImageIds();
+    fontManager = std::make_unique<FontManager>();
 }
 
 Skin::Skin(bool inMemory)
@@ -256,6 +285,7 @@ Skin::Skin(bool inMemory)
     imageStringToId = createIdNameMap();
     imageAllowedIds = allowedImageIds();
     useInMemorySkin = true;
+    fontManager = std::make_unique<FontManager>();
 }
 
 Skin::~Skin()
@@ -470,6 +500,7 @@ bool Skin::reloadSkin(std::shared_ptr<SurgeImageStore> bitmapStore)
     };
 
     // process the images and colors
+    fontManager->restoreLatoAsDefault();
     for (auto g : globals)
     {
         if (g.first == "defaultimage")
@@ -507,6 +538,16 @@ bool Skin::reloadSkin(std::shared_ptr<SurgeImageStore> bitmapStore)
                 // This will give us a broken skin but no need to tell the users
                 FIXMEERROR << "Unable to load image directory: " << e.what();
             }
+        }
+
+        if (g.first == "default-font")
+        {
+            auto family = g.second.props["family"];
+            auto f = typeFaces[family];
+            if (f)
+                fontManager->overrideLatoWith(f);
+            else
+                FIXMEERROR << "COULD NOT LOAD FONT " << family << std::endl;
         }
     }
 
@@ -629,6 +670,21 @@ bool Skin::reloadSkin(std::shared_ptr<SurgeImageStore> bitmapStore)
             {
                 // Look me up later
                 colors[id] = ColorStore(val, ColorStore::UNRESOLVED_ALIAS);
+            }
+        }
+        if (g.first == "font")
+        {
+            auto p = g.second.props;
+            auto fo = FontOverride();
+            if (p.find("family") != p.end())
+                fo.family = p["family"];
+            if (p.find("size") != p.end())
+                fo.size = std::atoi(p["size"].c_str());
+            if (p.find("id") != p.end())
+                fontOverrides[p["id"]] = fo;
+            else
+            {
+                FIXMEERROR << "Font without ID ignored ";
             }
         }
 
@@ -1003,7 +1059,7 @@ bool Skin::recursiveGroupParse(ControlGroup::ptr_t parent, TiXmlElement *control
     {
         /*
          * We now need to create all the base parent objects before we go
-         * and resolve them, since that resolutino can be recursive when
+         * and resolve them, since that resolution can be recursive when
          * looping over controls, and we don't want to actually modify controls
          * while resolving.
          */
@@ -1081,23 +1137,30 @@ juce::Font Skin::getFont(const Surge::Skin::FontDesc &d)
     jassert((int)Surge::Skin::FontDesc::italic == juce::Font::FontStyleFlags::italic);
     jassert((int)Surge::Skin::FontDesc::bold == juce::Font::FontStyleFlags::bold);
 
+    if (fontOverrides.find(d.id) != fontOverrides.end())
+    {
+        auto fo = fontOverrides[d.id];
+        if (typeFaces.find(fo.family) != typeFaces.end())
+            return juce::Font(juce::FontOptions(typeFaces[fo.family])).withPointHeight(fo.size);
+        return juce::Font(juce::FontOptions(fo.family, fo.size, juce::Font::FontStyleFlags::plain));
+    }
+
     if (d.hasParent)
     {
         return getFont(d.parent);
     }
     if (d.defaultFamily == Surge::Skin::FontDesc::SANS)
     {
-        return Surge::GUI::getFontManager()->getLatoAtSize(d.size,
-                                                           (juce::Font::FontStyleFlags)d.style);
+        return fontManager->getLatoAtSize(d.size, (juce::Font::FontStyleFlags)d.style);
     }
     if (d.defaultFamily == Surge::Skin::FontDesc::MONO)
     {
-        return Surge::GUI::getFontManager()->getFiraMonoAtSize(d.size);
+        return fontManager->getFiraMonoAtSize(d.size);
     }
 
     static bool IHaveImplementedThis = false;
     jassert(IHaveImplementedThis);
-    return Surge::GUI::getFontManager()->getLatoAtSize(d.size, (juce::Font::FontStyleFlags)d.style);
+    return fontManager->getLatoAtSize(d.size, (juce::Font::FontStyleFlags)d.style);
 }
 
 juce::Colour Skin::getColor(const std::string &iid, const juce::Colour &def,
@@ -1109,7 +1172,7 @@ juce::Colour Skin::getColor(const std::string &iid, const juce::Colour &def,
     if (noLoops.find(id) != noLoops.end())
     {
         std::ostringstream oss;
-        oss << "Resoving color '" << id
+        oss << "Resolving color '" << id
             << "' resulted in a loop. Please check the skin definition XML file. Colors which were "
                "visited during traversal are: ";
         for (auto l : noLoops)
@@ -1175,24 +1238,27 @@ Skin::hoverBitmapOverlayForBackgroundBitmap(Skin::Control::ptr_t c, SurgeImage *
     {
         return nullptr;
     }
+
     if (c.get())
     {
         // YES it might. Show and document this
         // std::cout << "TODO: The component may have a name for a hover asset type=" << t << "
         // component=" << c->toString() << std::endl;
     }
+
     if (!b)
     {
         return nullptr;
     }
+
     std::ostringstream sid;
+
     if (b->resourceID < 0)
     {
         // we got a skin
         auto pos = b->fname.find("bmp00");
         if (pos != std::string::npos)
         {
-            auto b4 = b->fname.substr(0, pos);
             auto ftr = b->fname.substr(pos + 3);
 
             switch (t)
@@ -1202,6 +1268,12 @@ Skin::hoverBitmapOverlayForBackgroundBitmap(Skin::Control::ptr_t c, SurgeImage *
                 break;
             case HOVER_OVER_ON:
                 sid << defaultImageIDPrefix << "hoverOn" << ftr;
+                break;
+            case TEMPOSYNC:
+                sid << defaultImageIDPrefix << "bmpTS" << ftr;
+                break;
+            case HOVER_TEMPOSYNC:
+                sid << defaultImageIDPrefix << "hoverTS" << ftr;
                 break;
             }
             auto bmp = bitmapStore->getImageByStringID(sid.str());
@@ -1219,6 +1291,13 @@ Skin::hoverBitmapOverlayForBackgroundBitmap(Skin::Control::ptr_t c, SurgeImage *
             break;
         case HOVER_OVER_ON:
             sid << defaultImageIDPrefix << "hoverOn" << std::setw(5) << std::setfill('0')
+                << b->resourceID << ".svg";
+            break;
+        case TEMPOSYNC:
+            sid << defaultImageIDPrefix << "bmpTS" << std::setw(5) << std::setfill('0')
+                << b->resourceID << ".svg";
+        case HOVER_TEMPOSYNC:
+            sid << defaultImageIDPrefix << "hoverTS" << std::setw(5) << std::setfill('0')
                 << b->resourceID << ".svg";
             break;
         }
@@ -1241,6 +1320,14 @@ std::string Surge::GUI::Skin::hoverImageIdForResource(const int resource, HoverT
         break;
     case HOVER_OVER_ON:
         sid << defaultImageIDPrefix << "hoverOn" << std::setw(5) << std::setfill('0') << resource
+            << ".svg";
+        break;
+    case TEMPOSYNC:
+        sid << defaultImageIDPrefix << "bmpTS" << std::setw(5) << std::setfill('0') << resource
+            << ".svg";
+        break;
+    case HOVER_TEMPOSYNC:
+        sid << defaultImageIDPrefix << "hoverTS" << std::setw(5) << std::setfill('0') << resource
             << ".svg";
         break;
     }

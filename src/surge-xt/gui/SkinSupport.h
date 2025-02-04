@@ -1,6 +1,27 @@
-// -*-c++-*-
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_SURGE_XT_GUI_SKINSUPPORT_H
+#define SURGE_SRC_SURGE_XT_GUI_SKINSUPPORT_H
 
 #include <vector>
 #include <string>
@@ -45,10 +66,15 @@ namespace Surge
 namespace GUI
 {
 
+struct FontManager;
+
 void loadTypefacesFromPath(const fs::path &p,
                            std::unordered_map<std::string, juce::Typeface::Ptr> &result);
 
 extern const std::string NoneClassName;
+
+static constexpr char MemorySkinName[] = "Surge Classic";
+
 class SkinDB;
 
 enum RootType
@@ -82,6 +108,7 @@ class Skin
 
     bool useInMemorySkin{false};
 
+    std::unique_ptr<FontManager> fontManager;
     bool reloadSkin(std::shared_ptr<SurgeImageStore> bitmapStore);
 
     std::string resourceName(const std::string &relativeName)
@@ -193,6 +220,13 @@ class Skin
     juce::Font getFont(const Surge::Skin::FontDesc &d);
 
   private:
+    struct FontOverride
+    {
+        std::string family{"Comic Sans"};
+        int size{9};
+    };
+    std::unordered_map<std::string, FontOverride> fontOverrides;
+
     juce::Colour
     getColor(const Surge::Skin::Color &id, const juce::Colour &def,
              std::unordered_set<std::string> noLoops = std::unordered_set<std::string>()) const
@@ -310,6 +344,8 @@ class Skin
     {
         HOVER,
         HOVER_OVER_ON,
+        TEMPOSYNC,
+        HOVER_TEMPOSYNC
     } HoverType;
 
     std::string hoverImageIdForResource(const int resource, HoverType t);
@@ -415,7 +451,8 @@ class SkinDB : public juce::DeletedAtShutdown
 
         bool matchesSkin(const Skin::ptr_t s) const
         {
-            return s.get() && s->root == root && s->name == name;
+            return s.get() && ((s->root == root && s->name == name) ||
+                               (rootType == MEMORY && s->displayName == MemorySkinName));
         }
     };
 
@@ -490,3 +527,5 @@ class SkinConsumingComponent
 
 } // namespace GUI
 } // namespace Surge
+
+#endif // SURGE_SRC_SURGE_XT_GUI_SKINSUPPORT_H

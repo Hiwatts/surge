@@ -107,9 +107,9 @@
         <color id="formulaeditor.linenumber.background" value="#2D2D2D"/>
         <color id="formulaeditor.linenumber.text" value="#808080"/>
 
-        <color id="formulaeditor.lua.bracket" value="#CCCCCC"/>
+        <color id="formulaeditor.lua.bracket" value="#dbb01c"/>
         <color id="formulaeditor.lua.comment" value="#808080"/>
-        <color id="formulaeditor.lua.identifier" value="#0090FF"/>
+        <color id="formulaeditor.lua.identifier" value="#9CDCFE"/>
         <color id="formulaeditor.lua.interpunction" value="#CCCCCC"/>
         <color id="formulaeditor.lua.keyword" value="#60E060"/>
         <color id="formulaeditor.lua.number" value="#A3A3FF"/>
@@ -146,6 +146,14 @@
 
         <color id="dialog.checkbox.border" value="lightgray"/>
         <color id="dialog.checkbox.tick" value="lightgray"/>
+
+        <color id="vkb.key.mouse_over" value="surgebluetrans"/>
+        <color id="vkb.key.pressed" value="surgeblue"/>
+        <color id="vkb.octave.background" value="bordergray"/>
+        <color id="vkb.octave.arrow" value="lightgray"/>
+        <color id="vkb.wheel.background" value="bggray"/>
+        <color id="vkb.wheel.border" value="bordergray"/>
+        <color id="vkb.wheel.value" value="surgeblue"/>
 
         <color id="effect.label.separator" value="#5E5E5E"/>
         <color id="effect.label.text" value="lightgray"/>
@@ -198,6 +206,7 @@
         <color id="filtermenu.value.hover" value="white"/>
 
         <color id="patchbrowser.text" value="lightgray"/>
+        <color id="patchbrowser.text.hover" value="#D4D4D4"/>
 
         <color id="patchbrowser.tooltip.border" value="bordergray"/>
         <color id="patchbrowser.tooltip.background" value="darkergray"/>
@@ -333,26 +342,26 @@
         <control ui_identifier="osc.param_7" class="def-hslider"/>
 
         <!-- Mixer -->
-        <control ui_identifier="mixer.mute_o1" x="0" y="1"/>
-        <control ui_identifier="mixer.mute_o2" x="20" y="1"/>
-        <control ui_identifier="mixer.mute_o3" x="40" y="1"/>
-        <control ui_identifier="mixer.mute_ring12" x="60" y="1"/>
-        <control ui_identifier="mixer.mute_ring23" x="80" y="1"/>
-        <control ui_identifier="mixer.mute_noise" x="100" y="1"/>
+        <control ui_identifier="mixer.mute_o1" x="1" y="2" w="18" h="11"/>
+        <control ui_identifier="mixer.mute_o2" x="21" y="2" w="18" h="11"/>
+        <control ui_identifier="mixer.mute_o3" x="41" y="2" w="18" h="11"/>
+        <control ui_identifier="mixer.mute_ring12" x="61" y="2" w="18" h="11"/>
+        <control ui_identifier="mixer.mute_ring23" x="81" y="2" w="18" h="11"/>
+        <control ui_identifier="mixer.mute_noise" x="101" y="2" w="18" h="11"/>
 
-        <control ui_identifier="mixer.solo_o1" x="0" y="12"/>
-        <control ui_identifier="mixer.solo_o2" x="20" y="12"/>
-        <control ui_identifier="mixer.solo_o3" x="40" y="12"/>
-        <control ui_identifier="mixer.solo_ring12" x="60" y="12"/>
-        <control ui_identifier="mixer.solo_ring23" x="80" y="12"/>
-        <control ui_identifier="mixer.solo_noise" x="100" y="12"/>
+        <control ui_identifier="mixer.solo_o1" x="1" y="15" w="18" h="11"/>
+        <control ui_identifier="mixer.solo_o2" x="21" y="15" w="18" h="11"/>
+        <control ui_identifier="mixer.solo_o3" x="41" y="15" w="18" h="11"/>
+        <control ui_identifier="mixer.solo_ring12" x="61" y="15" w="18" h="11"/>
+        <control ui_identifier="mixer.solo_ring23" x="81" y="15" w="18" h="11"/>
+        <control ui_identifier="mixer.solo_noise" x="101" y="15" w="18" h="11"/>
 
-        <control ui_identifier="mixer.route_o1" x="0" y="23"/>
-        <control ui_identifier="mixer.route_o2" x="20" y="23"/>
-        <control ui_identifier="mixer.route_o3" x="40" y="23"/>
-        <control ui_identifier="mixer.route_ring12" x="60" y="23"/>
-        <control ui_identifier="mixer.route_ring23" x="80" y="23"/>
-        <control ui_identifier="mixer.route_noise" x="100" y="23"/>
+        <control ui_identifier="mixer.route_o1" x="2" y="28" w="16" h="9"/>
+        <control ui_identifier="mixer.route_o2" x="22" y="28" w="16" h="9"/>
+        <control ui_identifier="mixer.route_o3" x="42" y="28" w="16" h="9"/>
+        <control ui_identifier="mixer.route_ring12" x="62" y="28" w="16" h="9"/>
+        <control ui_identifier="mixer.route_ring23" x="82" y="28" w="16" h="9"/>
+        <control ui_identifier="mixer.route_noise" x="102" y="28" w="16" h="9"/>
 
         <control ui_identifier="mixer.level_o1" y="38"/>
         <control ui_identifier="mixer.level_o2" y="38"/>
@@ -451,6 +460,10 @@
         <control ui_identifier="msegeditor.window" y="57" w="748"/>
         <control ui_identifier="formulaeditor.window" y="57" w="748"/>
         <control ui_identifier="tuningeditor.window" y="57" w="748" h="512"/>
-        <control ui_identifier="modlist.window" x="146" y="57" h="512"/>
+        <control ui_identifier="wteditor.window" x="149" y="56" w="755" h="513"/>
+        <control ui_identifier="modlist.window" x="149" y="56" w="600" h="513"/>
+        <control ui_identifier="filter.filter_analysis.window" x="298" y="261" h="211"/>
+        <control ui_identifier="filter.waveshaper_analysis.window" x="449" y="238"/>
+        <control ui_identifier="oscilloscope.window" y="57" w="748"/>
     </controls>
 </surge-skin>

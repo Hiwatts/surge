@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "RuntimeFont.h"
 #include "SurgeXTBinary.h"
@@ -23,7 +30,7 @@ namespace Surge
 namespace GUI
 {
 
-DefaultFonts::DefaultFonts()
+FontManager::FontManager()
 {
 #if WINDOWS
     /* On windows in memory fonts use GDI and OS fonts use D2D so if we have
@@ -54,19 +61,27 @@ DefaultFonts::DefaultFonts()
 
     firaMonoRegularTypeface = juce::Typeface::createSystemTypefaceFor(
         SurgeXTBinary::FiraMonoRegular_ttf, SurgeXTBinary::FiraMonoRegular_ttfSize);
+    setupFontMembers();
+}
+
+void FontManager::setupFontMembers()
+{
     displayFont = getLatoAtSize(9);
     patchNameFont = getLatoAtSize(13);
     lfoTypeFont = getLatoAtSize(8);
     aboutFont = getLatoAtSize(10);
 }
+FontManager::~FontManager(){};
 
-DefaultFonts::~DefaultFonts() { fmi = nullptr; };
-
-juce::Font DefaultFonts::getLatoAtSize(float size, juce::Font::FontStyleFlags style) const
+juce::Font FontManager::getLatoAtSize(float size, juce::Font::FontStyleFlags style) const
 {
-    if (useOSLato)
+    if (hasLatoOverride)
     {
-        return juce::Font("Lato", 10, 0).withPointHeight(size).withStyle(style);
+        return juce::Font(juce::FontOptions(latoOverride)).withPointHeight(size).withStyle(style);
+    }
+    else if (useOSLato)
+    {
+        return juce::Font(juce::FontOptions("Lato", 10, 0)).withPointHeight(size).withStyle(style);
     }
     else
     {
@@ -83,22 +98,28 @@ juce::Font DefaultFonts::getLatoAtSize(float size, juce::Font::FontStyleFlags st
         {
             tf = latoItalicTypeface;
         }
-        return juce::Font(tf).withPointHeight(size).withStyle(style);
+        return juce::Font(juce::FontOptions(tf)).withPointHeight(size).withStyle(style);
     }
 }
 
-juce::Font DefaultFonts::getFiraMonoAtSize(float size, juce::Font::FontStyleFlags style) const
+juce::Font FontManager::getFiraMonoAtSize(float size, juce::Font::FontStyleFlags style) const
 {
-    return juce::Font(firaMonoRegularTypeface).withPointHeight(size).withStyle(style);
+    return juce::Font(juce::FontOptions(firaMonoRegularTypeface))
+        .withPointHeight(size)
+        .withStyle(style);
 }
 
-DefaultFonts *DefaultFonts::fmi{nullptr};
-
-DefaultFonts *getFontManager()
+void FontManager::overrideLatoWith(juce::ReferenceCountedObjectPtr<juce::Typeface> itf)
 {
-    if (!DefaultFonts::fmi)
-        DefaultFonts::fmi = new DefaultFonts();
-    return DefaultFonts::fmi;
+    hasLatoOverride = true;
+    latoOverride = itf;
+    setupFontMembers();
+}
+void FontManager::restoreLatoAsDefault()
+{
+    hasLatoOverride = false;
+    latoOverride = nullptr;
+    setupFontMembers();
 }
 
 } // namespace GUI

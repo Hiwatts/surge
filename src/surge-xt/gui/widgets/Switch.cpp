@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SurgeGUIEditor.h"
 #include "Switch.h"
@@ -24,7 +31,7 @@ namespace Surge
 namespace Widgets
 {
 
-Switch::Switch()
+Switch::Switch() : juce::Component(), WidgetBaseMixin<Switch>(this)
 {
     setRepaintsOnMouseActivity(true);
     setDescription("Switch");
@@ -41,19 +48,14 @@ void Switch::paint(juce::Graphics &g)
         y = -getIntegerValue() * getLocalBounds().getHeight();
     }
 
-    float activationOpacity = 1.0;
-
-    if (isDeactivated)
-    {
-        activationOpacity = 0.35;
-    }
-
+    float activationOpacity = isDeactivated ? 0.35 : 1.0;
     auto t = juce::AffineTransform().translated(0, y);
+
     g.reduceClipRegion(getLocalBounds());
 
     switchD->draw(g, activationOpacity, t);
 
-    if (isHovered && hoverSwitchD)
+    if (!isDeactivated && isHovered && hoverSwitchD)
     {
         hoverSwitchD->draw(g, activationOpacity, t);
     }
@@ -72,6 +74,8 @@ void Switch::mouseDown(const juce::MouseEvent &event)
         return;
     }
 
+    mouseDownLongHold(event);
+
     if (isMultiIntegerValued())
     {
         storage->getPatch().isDirty = true;
@@ -85,7 +89,7 @@ void Switch::mouseDown(const juce::MouseEvent &event)
             setValueDirection(1);
         }
 
-        notifyValueChanged();
+        notifyValueChangedWithBeginEnd();
     }
     else
     {
@@ -93,7 +97,7 @@ void Switch::mouseDown(const juce::MouseEvent &event)
         {
             value = (value > 0.5) ? 0 : 1;
 
-            notifyValueChanged();
+            notifyValueChangedWithBeginEnd();
         }
     }
 }
@@ -112,7 +116,7 @@ void Switch::mouseWheelMove(const juce::MouseEvent &event, const juce::MouseWhee
         {
             storage->getPatch().isDirty = true;
             setValueDirection(mul);
-            notifyValueChanged();
+            notifyValueChangedWithBeginEnd();
         }
         else
         {
@@ -121,7 +125,7 @@ void Switch::mouseWheelMove(const juce::MouseEvent &event, const juce::MouseWhee
 
             if (ov != value)
             {
-                notifyValueChanged();
+                notifyValueChangedWithBeginEnd();
             }
         }
     }
@@ -137,6 +141,19 @@ bool Switch::keyPressed(const juce::KeyPress &key)
     if (action == OpenMenu)
     {
         notifyControlModifierClicked(juce::ModifierKeys(), true);
+        return true;
+    }
+
+    if (action == Return && !isMultiIntegerValued())
+    {
+        auto nv = 1.f;
+        if (value > 0.5)
+            nv = 0;
+        value = nv;
+        notifyBeginEdit();
+        notifyValueChanged();
+        notifyEndEdit();
+        repaint();
         return true;
     }
 
@@ -175,17 +192,16 @@ bool Switch::keyPressed(const juce::KeyPress &key)
 struct SwitchAH : public juce::AccessibilityHandler
 {
     explicit SwitchAH(Switch *s)
-        : mswitch(s), juce::AccessibilityHandler(
-                          *s,
-                          s->isMultiIntegerValued() ? juce::AccessibilityRole::button
-                                                    : juce::AccessibilityRole::toggleButton,
-                          juce::AccessibilityActions()
-                              .addAction(juce::AccessibilityActionType::showMenu,
-                                         [this]() { this->showMenu(); })
-                              .addAction(juce::AccessibilityActionType::toggle,
-                                         [this]() { this->showMenu(); })
-                              .addAction(juce::AccessibilityActionType::press,
-                                         [this]() { this->press(); }))
+        : mswitch(s),
+          juce::AccessibilityHandler(
+              *s,
+              (s->isAlwaysAccessibleMomentary()) ? juce::AccessibilityRole::button
+                                                 : juce::AccessibilityRole::toggleButton,
+              juce::AccessibilityActions()
+                  .addAction(juce::AccessibilityActionType::showMenu,
+                             [this]() { this->showMenu(); })
+                  .addAction(juce::AccessibilityActionType::toggle, [this]() { this->press(); })
+                  .addAction(juce::AccessibilityActionType::press, [this]() { this->press(); }))
     {
     }
 
@@ -204,7 +220,7 @@ struct SwitchAH : public juce::AccessibilityHandler
         if (mswitch->isMultiIntegerValued())
         {
             mswitch->setValueDirection(1);
-            mswitch->notifyValueChanged();
+            mswitch->notifyValueChangedWithBeginEnd();
         }
         else
         {
@@ -212,7 +228,7 @@ struct SwitchAH : public juce::AccessibilityHandler
             {
                 auto value = (mswitch->getValue() > 0.5) ? 0 : 1;
                 mswitch->setValue(value);
-                mswitch->notifyValueChanged();
+                mswitch->notifyValueChangedWithBeginEnd();
             }
         }
     }
@@ -226,9 +242,81 @@ struct SwitchAH : public juce::AccessibilityHandler
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SwitchAH);
 };
 
+struct SwitchMultiValAH : public juce::AccessibilityHandler
+{
+    struct MSValue : public juce::AccessibilityValueInterface
+    {
+        explicit MSValue(Switch *s) : sw(s) {}
+
+        Switch *sw;
+
+        bool isReadOnly() const override { return false; }
+        double getCurrentValue() const override { return sw->getIntegerValue(); }
+        void setValue(double newValue) override
+        {
+            sw->setIntegerValue((int)newValue);
+            sw->repaint();
+            sw->notifyValueChanged();
+        }
+        virtual juce::String getCurrentValueAsString() const override
+        {
+            auto sge = sw->firstListenerOfType<SurgeGUIEditor>();
+            if (sge)
+            {
+                return sge->getDisplayForTag(sw->getTag());
+            }
+            return std::to_string(sw->getIntegerValue());
+        }
+        virtual void setValueAsString(const juce::String &newValue) override
+        {
+            setValue(newValue.getDoubleValue());
+        }
+        AccessibleValueRange getRange() const override
+        {
+            return {{0, (double)sw->getIntegerMaxValue()}, 1};
+        }
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MSValue);
+    };
+
+    explicit SwitchMultiValAH(Switch *s)
+        : mswitch(s),
+          juce::AccessibilityHandler(
+              *s, juce::AccessibilityRole::slider,
+
+              juce::AccessibilityActions()
+                  .addAction(juce::AccessibilityActionType::showMenu,
+                             [this]() { this->showMenu(); })
+                  .addAction(juce::AccessibilityActionType::press, [this]() { this->press(); }),
+              juce::AccessibilityHandler::Interfaces{std::make_unique<MSValue>(s)})
+    {
+    }
+
+    void press()
+    {
+        mswitch->setValueDirection(1);
+        mswitch->notifyValueChangedWithBeginEnd();
+    }
+    void showMenu()
+    {
+        auto m = juce::ModifierKeys().withFlags(juce::ModifierKeys::rightButtonModifier);
+        mswitch->notifyControlModifierClicked(m);
+    }
+
+    Switch *mswitch;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SwitchMultiValAH);
+};
+
 std::unique_ptr<juce::AccessibilityHandler> Switch::createAccessibilityHandler()
 {
-    return std::make_unique<SwitchAH>(this);
+    if (isMultiIntegerValued())
+    {
+        return std::make_unique<SwitchMultiValAH>(this);
+    }
+    else
+    {
+        return std::make_unique<SwitchAH>(this);
+    }
 }
 
 } // namespace Widgets

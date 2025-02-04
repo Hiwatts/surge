@@ -1,22 +1,31 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_COMMON_DSP_OSCILLATORS_OSCILLATORBASE_H
+#define SURGE_SRC_COMMON_DSP_OSCILLATORS_OSCILLATORBASE_H
 
 #include "SurgeStorage.h"
 #include "OscillatorCommonFunctions.h"
+#include "sst/basic-blocks/dsp/Lag.h"
 
 class alignas(16) Oscillator
 {
@@ -26,6 +35,8 @@ class alignas(16) Oscillator
     // aligned to 16 bytes.
     float output alignas(16)[BLOCK_SIZE_OS];
     float outputR alignas(16)[BLOCK_SIZE_OS];
+
+    template <typename T, bool first = true> using lag = sst::basic_blocks::dsp::SurgeLag<T, first>;
 
     Oscillator(SurgeStorage *storage, OscillatorStorage *oscdata, pdata *localcopy);
     virtual ~Oscillator();
@@ -38,15 +49,26 @@ class alignas(16) Oscillator
                                float FMdepth = 0.f)
     {
     }
+
+    virtual void processSamplesForDisplay(float *samples, int size, bool real){};
+
     virtual void assign_fm(float *master_osc) { this->master_osc = master_osc; }
     virtual bool allow_display() { return true; }
     inline double pitch_to_omega(float x)
     {
-        return (2.0 * M_PI * Tunings::MIDI_0_FREQ * storage->note_to_pitch(x) * dsamplerate_os_inv);
+        return (2.0 * M_PI * Tunings::MIDI_0_FREQ * storage->note_to_pitch(x) *
+                storage->dsamplerate_os_inv);
     }
     inline double pitch_to_dphase(float x)
     {
-        return (double)(Tunings::MIDI_0_FREQ * storage->note_to_pitch(x) * dsamplerate_os_inv);
+        return (double)(Tunings::MIDI_0_FREQ * storage->note_to_pitch(x) *
+                        storage->dsamplerate_os_inv);
+    }
+
+    inline double pitch_to_dphase_with_absolute_offset(float x, float off)
+    {
+        return (double)(std::max(1.0, Tunings::MIDI_0_FREQ * storage->note_to_pitch(x) + off) *
+                        storage->dsamplerate_os_inv);
     }
 
     virtual void setGate(bool g) { gate = g; }
@@ -75,7 +97,7 @@ class AbstractBlitOscillator : public Oscillator
     float oscbuffer alignas(16)[OB_LENGTH + FIRipol_N];
     float oscbufferR alignas(16)[OB_LENGTH + FIRipol_N];
     float dcbuffer alignas(16)[OB_LENGTH + FIRipol_N];
-    __m128 osc_out, osc_out2, osc_outR, osc_out2R;
+    SIMD_M128 osc_out, osc_out2, osc_outR, osc_out2R;
     void prepare_unison(int voices);
     float integrator_hpf;
     float pitchmult, pitchmult_inv;
@@ -87,3 +109,5 @@ class AbstractBlitOscillator : public Oscillator
     float panL[MAX_UNISON], panR[MAX_UNISON];
     int state[MAX_UNISON];
 };
+
+#endif // SURGE_SRC_COMMON_DSP_OSCILLATORS_OSCILLATORBASE_H

@@ -1,20 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_WIDGETBASEMIXIN_H
-#define SURGE_XT_WIDGETBASEMIXIN_H
+#ifndef SURGE_SRC_SURGE_XT_GUI_WIDGETS_WIDGETBASEMIXIN_H
+#define SURGE_SRC_SURGE_XT_GUI_WIDGETS_WIDGETBASEMIXIN_H
 
 #include "SkinSupport.h"
 #include "SurgeGUICallbackInterfaces.h"
@@ -35,7 +42,7 @@ template <typename T>
 struct WidgetBaseMixin : public Surge::GUI::SkinConsumingComponent,
                          public Surge::GUI::IComponentTagValue
 {
-    WidgetBaseMixin() { asT()->setWantsKeyboardFocus(true); }
+    WidgetBaseMixin(juce::Component *c) { c->setWantsKeyboardFocus(true); }
     inline T *asT() { return static_cast<T *>(this); }
 
     uint32_t tag{0};
@@ -87,6 +94,13 @@ struct WidgetBaseMixin : public Surge::GUI::SkinConsumingComponent,
             t->controlEndEdit(this);
     }
 
+    void notifyValueChangedWithBeginEnd()
+    {
+        notifyBeginEdit();
+        notifyValueChanged();
+        notifyEndEdit();
+    }
+
     virtual void updateAccessibleStateOnUserValueChange() {}
 
     juce::Point<float> enqueueStartPosition{-18.f, -18.f};
@@ -117,6 +131,13 @@ struct WidgetBaseMixin : public Surge::GUI::SkinConsumingComponent,
         auto sge = firstListenerOfType<SurgeGUIEditor>();
         if (sge)
             sge->enqueueFutureInfowindow(t, asT()->getBounds(), place);
+    }
+
+    void enqueueAccessibleAnnouncement(const std::string &s)
+    {
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+        if (sge)
+            sge->enqueueAccessibleAnnouncement(s);
     }
 
     void showInfowindow(bool isEditingModulation)
@@ -190,18 +211,27 @@ struct WidgetBaseMixin : public Surge::GUI::SkinConsumingComponent,
 template <typename T> struct LongHoldMixin
 {
     LongHoldMixin() {}
+
     virtual ~LongHoldMixin()
     {
         if (timer && timer->isTimerRunning())
+        {
             timer->stopTimer();
+        }
     }
+
     inline T *asT() { return static_cast<T *>(this); }
 
     static constexpr uint32_t holdDelayTimeInMS = 1000;
+    static constexpr uint32_t fingerMovementTolerancePx = 8;
+
     void onLongHoldWrapper()
     {
         if (timer)
+        {
             timer->stopTimer();
+        }
+
         onLongHold();
     }
 
@@ -214,37 +244,59 @@ template <typename T> struct LongHoldMixin
     bool shouldLongHold()
     {
         // return true;
-        return GUI::isTouchMode(asT()->storage);
+        if (asT()->storage)
+            return GUI::isTouchMode(asT()->storage);
+        return false;
     }
 
     juce::Point<float> startingHoldPosition;
+
     virtual void mouseDownLongHold(const juce::MouseEvent &e)
     {
         if (!shouldLongHold())
+        {
             return;
+        }
 
         startingHoldPosition = e.position.toFloat();
+
         if (timer && timer->isTimerRunning())
+        {
             timer->stopTimer();
+        }
+
         timer = std::make_unique<LHCB>(this);
-        timer->startTimer(holdDelayTimeInMS); // ms
+        timer->startTimer(holdDelayTimeInMS);
     }
+
     virtual void mouseMoveLongHold(const juce::MouseEvent &e)
     {
-        if (e.position.getDistanceFrom(startingHoldPosition) > 4)
+        if (e.position.getDistanceFrom(startingHoldPosition) > fingerMovementTolerancePx)
+        {
             if (timer && timer->isTimerRunning())
+            {
                 timer->stopTimer();
+            }
+        }
     }
+
     virtual void mouseDragLongHold(const juce::MouseEvent &e)
     {
-        if (e.position.getDistanceFrom(startingHoldPosition) > 1)
+        if (e.position.getDistanceFrom(startingHoldPosition) > fingerMovementTolerancePx)
+        {
             if (timer && timer->isTimerRunning())
+            {
                 timer->stopTimer();
+            }
+        }
     }
+
     virtual void mouseUpLongHold(const juce::MouseEvent &e)
     {
         if (timer && timer->isTimerRunning())
+        {
             timer->stopTimer();
+        }
     }
 
     struct LHCB : public juce::Timer
@@ -253,6 +305,7 @@ template <typename T> struct LongHoldMixin
         LHCB(LongHoldMixin<T> *t) : that(t) {}
         void timerCallback() override { that->onLongHoldWrapper(); }
     };
+
     std::unique_ptr<juce::Timer> timer;
 };
 } // namespace Widgets

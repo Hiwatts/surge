@@ -1,7 +1,30 @@
-#pragma once
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+#ifndef SURGE_SRC_COMMON_SKINCOLORS_H
+#define SURGE_SRC_COMMON_SKINCOLORS_H
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 /*
  * For a discussion of why this is in src/common rather than src/common/gui
@@ -214,7 +237,7 @@ extern const Surge::Skin::Color Background, Border, BorderHover, Text, TextHover
 }
 namespace Macro
 {
-extern const Surge::Skin::Color Background, Fill, CurrentValue;
+extern const Surge::Skin::Color Background, Border, Fill, CurrentValue;
 }
 } // namespace ModSource
 
@@ -253,7 +276,8 @@ namespace Osc
 {
 namespace Display
 {
-extern const Surge::Skin::Color Bounds, Center, AnimatedWave, Wave, Dots;
+extern const Surge::Skin::Color Bounds, Center, AnimatedWave, WaveCurrent3D, WaveStart3D, WaveEnd3D,
+    WaveFillStart3D, WaveFillEnd3D, Wave, Dots;
 }
 namespace Filename
 {
@@ -285,7 +309,7 @@ extern const Surge::Skin::Color Background;
 
 namespace PatchBrowser
 {
-extern const Surge::Skin::Color Text;
+extern const Surge::Skin::Color Text, TextHover;
 
 namespace CommentTooltip
 {
@@ -302,15 +326,15 @@ namespace Scene
 {
 namespace PitchBendRange
 {
-extern const Surge::Skin::Color Text, HoverText;
+extern const Surge::Skin::Color Text, TextHover;
 }
 namespace SplitPoint
 {
-extern const Surge::Skin::Color Text, HoverText;
+extern const Surge::Skin::Color Text, TextHover;
 }
 namespace KeytrackRoot
 {
-extern const Surge::Skin::Color Text, HoverText;
+extern const Surge::Skin::Color Text, TextHover;
 }
 } // namespace Scene
 
@@ -368,6 +392,11 @@ namespace VirtualKeyboard
 {
 extern const Surge::Skin::Color Text, Shadow;
 
+namespace Wheel
+{
+extern const Surge::Skin::Color Background, Border, Value;
+}
+
 namespace Key
 {
 extern const Surge::Skin::Color Black, White, Separator, MouseOver, Pressed;
@@ -392,7 +421,9 @@ extern const Surge::Skin::Color ActiveTabBackground, InactiveTabBackground, Bord
 namespace TextMultiSwitch
 {
 extern const Surge::Skin::Color Background, Border, Separator, DeactivatedText, Text, OnText,
-    OnFill, HoverText, HoverOnText, HoverFill, HoverOnFill, HoverOnBorder, UnpressedHighlight;
+    OnFill, TextHover, HoverOnText, HoverFill, HoverOnFill, HoverOnBorder, UnpressedHighlight;
 }
 } // namespace JuceWidgets
 } // namespace Colors
+
+#endif // SURGE_SRC_COMMON_SKINCOLORS_H

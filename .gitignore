@@ -87,6 +87,7 @@ buildxt/
 build-arm/
 build_lv2
 buildiwyu/
+buildpy/
 cmake-build-*/
 bwd/
 CMakeUserPresets.json
@@ -103,3 +104,7 @@ libs/juce-*
 # A place for BP to store stuff
 ignore/*
 __pycache__
+minst.sh
+
+Testing/
+installer-tmp/

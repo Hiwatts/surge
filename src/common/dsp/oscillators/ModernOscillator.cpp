@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "ModernOscillator.h"
 #include "DebugHelpers.h"
@@ -100,7 +107,7 @@
  * So rather than that approach, what we do is: at every sample, figure out the
  * frequency desired *at that sample*. We then figure out the 3 generators
  * for that frequency at that sample (prior, prior - 1, and prior - 2) and differentiate
- * using a numercial second derivative. This is more CPU intensive, but it is rock
+ * using a numerical second derivative. This is more CPU intensive, but it is rock
  * solid under all sorts of frequency modulation, including FM, pitch shifts, and sync.
  *
  * Finally, that numerical integration. I use the standard second derivative form
@@ -110,7 +117,7 @@
  * having the candidate phases be +1/0/-1 rather than 0/-1/-2 but that somehow felt
  * a wee bit like cheating. Anyway, the difference is negligible.
  *
- * Other than that, FM is obivous, sync runs two clocks and resets obviously,
+ * Other than that, FM is obvious, sync runs two clocks and resets obviously,
  * and the rest is just mixing and lagging. All pretty obvious.
  */
 
@@ -134,7 +141,8 @@ void ModernOscillator::init(float pitch, bool is_display, bool nonzero_init_drif
         unisonOffsets[u] = us.detune(u);
         us.attenuatedPanLaw(u, mixL[u], mixR[u]);
 
-        phase[u] = oscdata->retrigger.val.b || is_display ? 0.f : storage->rand_01();
+        phase[u] =
+            oscdata->retrigger.val.b || is_display ? pitch_to_dphase(pitch) : storage->rand_01();
         sphase[u] = phase[u];
         sTurnFrac[u] = 0;
         sprior[u] = 0;
@@ -166,11 +174,11 @@ void ModernOscillator::process_sblk(float pitch, float drift, bool stereo, float
     pitchlag.startValue(pitch);
     sync.newValue(std::max(0.f, localcopy[oscdata->p[mo_sync].param_id_in_scene].f));
 
+    float absOff = 0;
     if (oscdata->p[mo_unison_detune].absolute)
     {
-        float nSpread = ud * 16 * storage->note_to_pitch_inv(pitch) / Tunings::MIDI_0_FREQ * 12;
-        ud = nSpread;
-        // TODO : Tuning Awareness alas
+        absOff = ud * 16;
+        ud = 0;
     }
 
     for (int u = 0; u < n_unison; ++u)
@@ -178,10 +186,13 @@ void ModernOscillator::process_sblk(float pitch, float drift, bool stereo, float
         auto dval = driftLFO[u].next();
         auto lfodetune = drift * dval;
 
-        dpbase[u].newValue(
-            std::min(0.5, pitch_to_dphase(pitchlag.v + lfodetune + ud * unisonOffsets[u])));
-        dspbase[u].newValue(std::min(
-            0.5, pitch_to_dphase(pitchlag.v + lfodetune + sync.v + ud * unisonOffsets[u])));
+        dpbase[u].newValue(std::min(
+            0.5, pitch_to_dphase_with_absolute_offset(
+                     pitchlag.v + lfodetune + ud * unisonOffsets[u], absOff * unisonOffsets[u])));
+        dspbase[u].newValue(
+            std::min(0.5, pitch_to_dphase_with_absolute_offset(pitchlag.v + lfodetune + sync.v +
+                                                                   ud * unisonOffsets[u],
+                                                               absOff * unisonOffsets[u])));
     }
 
     auto subdt = drift * driftLFO[0].val();
@@ -358,7 +369,7 @@ void ModernOscillator::process_sblk(float pitch, float drift, bool stereo, float
                     sphase[u] -= floor(sphase[u]); // just in case we have a very high sync
 
                     /*
-                     * So the way we do synch can be a bit aliasy. Basically we move the phase
+                     * So the way we do sync can be a bit aliasy. Basically we move the phase
                      * forward and then difference over the new phase. WHat we should really do is
                      * figure out continuous generators with sync in but ugh that's super hard and
                      * it is late in the 1.9 cycle. So instead what we do is a little compensating

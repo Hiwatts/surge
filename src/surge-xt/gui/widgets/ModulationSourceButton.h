@@ -1,20 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_MODULATIONSOURCEBUTTON_H
-#define SURGE_XT_MODULATIONSOURCEBUTTON_H
+#ifndef SURGE_SRC_SURGE_XT_GUI_WIDGETS_MODULATIONSOURCEBUTTON_H
+#define SURGE_SRC_SURGE_XT_GUI_WIDGETS_MODULATIONSOURCEBUTTON_H
 
 #include "WidgetBaseMixin.h"
 #include "ModulationSource.h"
@@ -31,7 +38,8 @@ namespace Surge
 namespace Widgets
 {
 struct ModulationSourceButton : public juce::Component,
-                                public WidgetBaseMixin<ModulationSourceButton>
+                                public WidgetBaseMixin<ModulationSourceButton>,
+                                public LongHoldMixin<ModulationSourceButton>
 {
     ModulationSourceButton();
 
@@ -87,7 +95,7 @@ struct ModulationSourceButton : public juce::Component,
     }
     bool isMeta{false}, isBipolar{false};
     void setIsMeta(bool b) { isMeta = b; }
-    void setBipolar(bool b) { isBipolar = b; }
+    void setIsBipolar(bool b);
 
     bool containsModSource(modsources ms)
     {
@@ -122,14 +130,21 @@ struct ModulationSourceButton : public juce::Component,
         if ((state & 3) == 2)
         {
             toggleArmAccButton->setTitle("Disarm");
+            toggleArmAccButton->setDescription("Disarm");
         }
         else
         {
             toggleArmAccButton->setTitle("Arm");
+            toggleArmAccButton->setDescription("Arm");
+        }
+        if (auto *h = toggleArmAccButton->getAccessibilityHandler())
+        {
+            h->notifyAccessibilityEvent(juce::AccessibilityEvent::titleChanged);
         }
     }
     int getState() const { return state; }
     bool transientArmed{false}; // armed in drop state
+    int newlySelected{0};
 
     bool secondaryHoverActive{false};
 
@@ -141,23 +156,30 @@ struct ModulationSourceButton : public juce::Component,
             repaint();
     }
 
+    juce::Font font{juce::FontOptions()};
+
+    void setFont(const juce::Font &f)
+    {
+        font = f;
+        repaint();
+    }
+
     bool isHovered{false};
+
+    bool isCurrentlyHovered() override { return isHovered; }
 
     void mouseEnter(const juce::MouseEvent &event) override;
     void mouseExit(const juce::MouseEvent &event) override;
     void startHover(const juce::Point<float> &f) override;
     void endHover() override;
     bool keyPressed(const juce::KeyPress &key) override;
+
     void focusGained(juce::Component::FocusChangeType cause) override
     {
         startHover(getBounds().getBottomLeft().toFloat());
-        repaint();
     }
-    void focusLost(juce::Component::FocusChangeType cause) override
-    {
-        endHover();
-        repaint();
-    }
+
+    void focusLost(juce::Component::FocusChangeType cause) override { endHover(); }
 
     void onSkinChanged() override;
 
@@ -211,17 +233,20 @@ struct ModulationSourceButton : public juce::Component,
 
     void resized() override;
 
-    std::unique_ptr<juce::Component> targetAccButton, selectAccButton, toggleArmAccButton;
+    std::unique_ptr<juce::Component> targetAccButton, selectAccButton, toggleArmAccButton,
+        macroSlider;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ModulationSourceButton);
 };
 
 struct ModulationOverviewLaunchButton : public juce::Button,
                                         juce::Button::Listener,
-                                        Surge::GUI::SkinConsumingComponent
+                                        Surge::GUI::SkinConsumingComponent,
+                                        Surge::GUI::Hoverable
+
 {
-    ModulationOverviewLaunchButton(SurgeGUIEditor *ed)
-        : juce::Button("Open Modulation Overview"), editor(ed)
+    ModulationOverviewLaunchButton(SurgeGUIEditor *ed, SurgeStorage *s)
+        : juce::Button("Open Modulation Overview"), editor(ed), storage(s)
     {
         addListener(this);
     }
@@ -231,7 +256,28 @@ struct ModulationOverviewLaunchButton : public juce::Button,
 
     void buttonClicked(Button *button) override;
 
-    SurgeGUIEditor *editor;
+    void mouseDown(const juce::MouseEvent &event) override;
+    bool keyPressed(const juce::KeyPress &key) override;
+
+    bool isH{false};
+
+    void mouseEnter(const juce::MouseEvent &event) override
+    {
+        isH = true;
+        repaint();
+    }
+
+    void mouseExit(const juce::MouseEvent &event) override
+    {
+        isH = false;
+        repaint();
+    }
+
+    bool isCurrentlyHovered() override { return isH; }
+
+    SurgeGUIEditor *editor{nullptr};
+    SurgeStorage *storage{nullptr};
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ModulationOverviewLaunchButton);
 };
 } // namespace Widgets

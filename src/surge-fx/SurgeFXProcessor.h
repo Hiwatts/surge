@@ -1,17 +1,33 @@
 /*
-  ==============================================================================
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-    This file was auto-generated!
-
-    It contains the basic framework code for a JUCE plugin processor.
-
-  ==============================================================================
-*/
-
-#pragma once
+#ifndef SURGE_SRC_SURGE_FX_SURGEFXPROCESSOR_H
+#define SURGE_SRC_SURGE_FX_SURGEFXPROCESSOR_H
 
 #include "SurgeStorage.h"
 #include "Effect.h"
+#include "FXOpenSoundControl.h"
+#include <atomic>
+#include "sst/filters/HalfRateFilter.h"
 
 #include "juce_audio_processors/juce_audio_processors.h"
 
@@ -38,6 +54,7 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
     int output_position{-1};
 
     bool nonLatentBlockMode{true};
+
     //==============================================================================
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -45,10 +62,42 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
     bool isBusesLayoutSupported(const BusesLayout &layouts) const override;
 
     void processBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &) override;
+    void processBlockOSC();
 
     //==============================================================================
     juce::AudioProcessorEditor *createEditor() override;
     bool hasEditor() const override;
+
+    //==============================================================================
+    // Open Sound Control
+    enum oscToAudio_type
+    {
+        FX_PARAM
+    };
+
+    // Message from OSC input to the audio thread
+    struct oscToAudio
+    {
+        oscToAudio_type type;
+        int p_index{0};
+        float fval{0.0};
+
+        oscToAudio() {}
+        explicit oscToAudio(oscToAudio_type omtype, float f, int pidx)
+            : type(omtype), fval(f), p_index(pidx)
+        {
+        }
+    };
+    sst::cpputils::SimpleRingBuffer<oscToAudio, 4096> oscRingBuf;
+
+    SurgeFX::FxOSC::FXOpenSoundControl oscHandler;
+    std::atomic<bool> oscCheckStartup{false};
+    void tryLazyOscStartupFromStreamedState();
+
+    bool initOSCIn(int port);
+    bool changeOSCInPort(int newport);
+    void initOSCError(int port, std::string outIP = "");
+    std::atomic<bool> oscReceiving{false};
 
     //==============================================================================
     const juce::String getName() const override;
@@ -57,6 +106,7 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
     bool producesMidi() const override;
     bool isMidiEffect() const override;
     double getTailLengthSeconds() const override;
+    void reset() override;
 
     //==============================================================================
     int getNumPrograms() override;
@@ -71,32 +121,38 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
 
     int getEffectType() { return effectNum; }
     float getFXStorageValue01(int i) { return fxstorage->p[fx_param_remap[i]].get_value_f01(); }
+    float getFXStorageDefaultValue01(int i)
+    {
+        return fxstorage->p[fx_param_remap[i]].get_default_value_f01();
+    }
     float getFXParamValue01(int i) { return *(fxParams[i]); }
     void setFXParamValue01(int i, float f) { *(fxParams[i]) = f; }
+
     void setFXParamTempoSync(int i, bool b)
     {
-        int v = *(fxParamFeatures[i]);
+        int v = paramFeatures[i];
         if (b)
             v = v | kTempoSync;
         else
             v = v & ~kTempoSync;
-        fxParamFeatures[i]->setValueNotifyingHost((float)v / 0xFF);
+        paramFeatures[i] = v;
     }
-    bool getFXParamTempoSync(int i) { return *(fxParamFeatures[i]) & kTempoSync; }
+
+    bool getFXParamTempoSync(int i) { return (paramFeatures[i]) & kTempoSync; }
     void setFXStorageTempoSync(int i, bool b) { fxstorage->p[fx_param_remap[i]].temposync = b; }
     bool getFXStorageTempoSync(int i) { return fxstorage->p[fx_param_remap[i]].temposync; }
     bool canTempoSync(int i) { return fxstorage->p[fx_param_remap[i]].can_temposync(); }
 
     void setFXParamExtended(int i, bool b)
     {
-        int v = *(fxParamFeatures[i]);
+        int v = (paramFeatures[i]);
         if (b)
             v = v | kExtended;
         else
             v = v & ~kExtended;
-        fxParamFeatures[i]->setValueNotifyingHost((float)v / 0xFF);
+        paramFeatures[i] = v;
     }
-    bool getFXParamExtended(int i) { return *(fxParamFeatures[i]) & kExtended; }
+    bool getFXParamExtended(int i) { return paramFeatures[i] & kExtended; }
     void setFXStorageExtended(int i, bool b)
     {
         fxstorage->p[fx_param_remap[i]].set_extend_range(b);
@@ -106,28 +162,28 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
 
     void setFXParamAbsolute(int i, bool b)
     {
-        int v = *(fxParamFeatures[i]);
+        int v = paramFeatures[i];
         if (b)
             v = v | kAbsolute;
         else
             v = v & ~kAbsolute;
-        fxParamFeatures[i]->setValueNotifyingHost((float)v / 0xFF);
+        paramFeatures[i] = v;
     }
-    bool getFXParamAbsolute(int i) { return *(fxParamFeatures[i]) & kAbsolute; }
+    bool getFXParamAbsolute(int i) { return paramFeatures[i] & kAbsolute; }
     void setFXStorageAbsolute(int i, bool b) { fxstorage->p[fx_param_remap[i]].absolute = b; }
     bool getFXStorageAbsolute(int i) { return fxstorage->p[fx_param_remap[i]].absolute; }
     bool canAbsolute(int i) { return fxstorage->p[fx_param_remap[i]].can_be_absolute(); }
 
     void setFXParamDeactivated(int i, bool b)
     {
-        int v = *(fxParamFeatures[i]);
+        int v = paramFeatures[i];
         if (b)
             v = v | kDeactivated;
         else
             v = v & ~kDeactivated;
-        fxParamFeatures[i]->setValueNotifyingHost((float)v / 0xFF);
+        paramFeatures[i] = v;
     }
-    bool getFXParamDeactivated(int i) { return *(fxParamFeatures[i]) & kDeactivated; }
+    bool getFXParamDeactivated(int i) { return paramFeatures[i] & kDeactivated; }
     void setFXStorageDeactivated(int i, bool b) { fxstorage->p[fx_param_remap[i]].deactivated = b; }
     bool getFXStorageDeactivated(int i) { return fxstorage->p[fx_param_remap[i]].deactivated; }
     bool getFXStorageAppearsDeactivated(int i)
@@ -159,7 +215,6 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
             if (wasParamFeatureChanged[i])
             {
                 wasParamFeatureChanged[i] = false;
-                fxParamFeatures[i]->endChangeGesture();
             }
     }
 
@@ -193,7 +248,7 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
     {
         if (b)
         {
-            fxParamFeatures[i]->beginChangeGesture();
+            // Used to send a start change here but we don't have params any more
         }
         else
         {
@@ -204,13 +259,16 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
 
     int32_t paramFeatureFromParam(Parameter *p)
     {
-        return (p->temposync ? kTempoSync : 0) + (p->extend_range ? kExtended : 0);
+        return (p->temposync ? kTempoSync : 0) + (p->extend_range ? kExtended : 0) +
+               (p->absolute ? kAbsolute : 0) + (p->appears_deactivated() ? kDeactivated : 0);
     };
 
     void paramFeatureOntoParam(Parameter *p, int32_t features)
     {
         p->temposync = features & kTempoSync;
         p->set_extend_range(features & kExtended);
+        p->absolute = features & kAbsolute;
+        p->deactivated = features & kDeactivated;
     }
 
     // Information about parameter strings
@@ -232,9 +290,17 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
             return "-";
         }
 
-        char txt[1024];
-        fxstorage->p[fx_param_remap[i]].get_display(txt, false, 0);
-        return txt;
+        return fxstorage->p[fx_param_remap[i]].get_display(false, 0);
+    }
+
+    std::string getParamValueFor(int idx, float f)
+    {
+        if (fxstorage->p[fx_param_remap[idx]].ctrltype == ct_none)
+        {
+            return "-";
+        }
+
+        return fxstorage->p[fx_param_remap[idx]].get_display(true, f);
     }
 
     std::string getParamValueFromFloat(int i, float f)
@@ -244,10 +310,9 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
             return "-";
         }
 
-        char txt[1024];
         fxstorage->p[fx_param_remap[i]].set_value_f01(f);
-        fxstorage->p[fx_param_remap[i]].get_display(txt, false, 0);
-        return txt;
+
+        return fxstorage->p[fx_param_remap[i]].get_display(false, 0);
     }
 
     void updateJuceParamsFromStorage();
@@ -258,14 +323,48 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
     // Members for the FX. If this looks a lot like surge-rack/SurgeFX.hpp that's not a coincidence
     std::unique_ptr<SurgeStorage> storage;
 
+    std::atomic<bool> m_audioValid{true};
+    std::string m_audioValidMessage{};
+
+    sst::filters::HalfRate::HalfRateFilter halfbandIN{6, true};
+
   private:
+    template <typename T, typename F> struct FXAudioParameter : public T
+    {
+        juce::String mutableName;
+        template <typename... Args>
+        FXAudioParameter(Args &&...args) : T(std::forward<Args>(args)...)
+        {
+            mutableName = T::getName(64);
+        }
+
+        FXAudioParameter<T, F> &operator=(F newValue)
+        {
+            T::operator=(newValue);
+            return *this;
+        }
+
+        juce::String getName(int end) const override { return mutableName.substring(0, end); }
+
+        std::function<juce::String(float, int)> getTextHandler;
+        std::function<float(const juce::String &)> getTextToValue;
+        juce::String getText(float f, int i) const override { return getTextHandler(f, i); }
+
+        float getValueForText(const juce::String &text) const override
+        {
+            return getTextToValue(text);
+        }
+    };
+
     //==============================================================================
     juce::AudioProcessorParameter *fxBaseParams[2 * n_fx_params + 1];
 
     // These are just copyes of the pointer from above with the cast done to make the code look
     // nicer
-    juce::AudioParameterFloat *fxParams[n_fx_params];
-    juce::AudioParameterInt *fxType;
+    typedef FXAudioParameter<juce::AudioParameterFloat, float> float_param_t;
+    typedef FXAudioParameter<juce::AudioParameterInt, int> int_param_t;
+    float_param_t *fxParams[n_fx_params];
+    int_param_t *fxType;
 
     enum ParamFeatureFlags
     {
@@ -274,13 +373,13 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
         kAbsolute = 1U << 2U,
         kDeactivated = 1U << 3U
     };
-    juce::AudioParameterInt *fxParamFeatures[n_fx_params];
-
-    std::atomic<bool> changedParams[2 * n_fx_params + 1];
-    std::atomic<float> changedParamsValue[2 * n_fx_params + 1];
-    std::atomic<bool> isUserEditing[2 * n_fx_params + 1];
+    std::atomic<int> paramFeatures[n_fx_params];
+    std::atomic<bool> changedParams[n_fx_params + 1];
+    std::atomic<float> changedParamsValue[n_fx_params + 1];
+    std::atomic<bool> isUserEditing[n_fx_params + 1];
     std::atomic<bool> wasParamFeatureChanged[n_fx_params];
     std::function<void()> paramChangeListener;
+
     float lastBPM = -1;
     bool supressParameterUpdates = false;
     struct SupressGuard
@@ -309,5 +408,19 @@ class SurgefxAudioProcessor : public juce::AudioProcessor,
     void copyGlobaldataSubset(int start, int end);
     void setupStorageRanges(Parameter *start, Parameter *endIncluding);
 
+    std::atomic<bool> audioRunning{false};
+
+  public:
+    bool oscStartIn = false;
+    int oscPortIn = 53290;
+
+    void prepareParametersAbsentAudio();
+    void setParameterByString(int i, const std::string &s);
+    float getParameterValueForString(int i, const std::string &s);
+    bool canSetParameterByString(int i);
+
+  private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SurgefxAudioProcessor)
 };
+
+#endif // SURGE_SRC_SURGE_FX_SURGEFXPROCESSOR_H

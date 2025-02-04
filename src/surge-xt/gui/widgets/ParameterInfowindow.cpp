@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "ParameterInfowindow.h"
 #include "RuntimeFont.h"
@@ -20,11 +27,7 @@ namespace Surge
 {
 namespace Widgets
 {
-ParameterInfowindow::ParameterInfowindow()
-{
-    setInterceptsMouseClicks(false, false);
-    setFont(Surge::GUI::getFontManager()->displayFont);
-}
+ParameterInfowindow::ParameterInfowindow() { setInterceptsMouseClicks(false, false); }
 ParameterInfowindow::~ParameterInfowindow() = default;
 
 void ParameterInfowindow::paint(juce::Graphics &g)
@@ -60,6 +63,7 @@ void ParameterInfowindow::paint(juce::Graphics &g)
 
     g.setColour(txtCol);
     g.setOpacity(opacity);
+    font = skin->fontManager->displayFont;
     g.setFont(font);
 
     if (name.empty())
@@ -127,9 +131,9 @@ void ParameterInfowindow::setBoundsToAccompany(const juce::Rectangle<int> &contr
 
     if (name.empty())
     {
-        auto sl1 = font.getStringWidth(display);
-        auto sl2 = font.getStringWidth(displayAlt);
-        auto pad = font.getStringWidth("  ");
+        auto sl1 = SST_STRING_WIDTH_INT(font, display);
+        auto sl2 = SST_STRING_WIDTH_INT(font, displayAlt);
+        auto pad = SST_STRING_WIDTH_INT(font, "  ");
         desiredWidth = std::max(sl1 + sl2 + pad, desiredWidth);
     }
     else
@@ -140,16 +144,16 @@ void ParameterInfowindow::setBoundsToAccompany(const juce::Rectangle<int> &contr
         {
             lheight = font.getHeight() * 3 + 11;
             // row 2
-            auto r1l = font.getStringWidth(name);
-            auto r2l =
-                font.getStringWidth(mdiws.dvalminus + "  " + mdiws.val + "  " + mdiws.dvalplus);
-            auto r3l = font.getStringWidth(mdiws.valminus + "  " + mdiws.valplus);
+            auto r1l = SST_STRING_WIDTH_INT(font, name);
+            auto r2l = SST_STRING_WIDTH_INT(font, mdiws.dvalminus + "  " + mdiws.val + "  " +
+                                                      mdiws.dvalplus);
+            auto r3l = SST_STRING_WIDTH_INT(font, mdiws.valminus + "  " + mdiws.valplus);
             desiredWidth = std::max(std::max(std::max(r1l, r2l), r3l) + 8, desiredWidth);
         }
         else
         {
-            auto sln = font.getStringWidth(name);
-            auto sl1 = font.getStringWidth(display);
+            auto sln = SST_STRING_WIDTH_INT(font, name);
+            auto sl1 = SST_STRING_WIDTH_INT(font, display);
             desiredWidth = std::max(std::max(sln, sl1) + 8, desiredWidth);
             lheight = font.getHeight() * 2 + 9;
         }
@@ -173,6 +177,11 @@ void ParameterInfowindow::setBoundsToAccompany(const juce::Rectangle<int> &contr
         else
         {
             jassert(false);
+        }
+        if (r.getRight() > parentRect.getRight())
+        {
+            // push left
+            r = r.withX(controlRect.getX() - w).withWidth(w);
         }
     }
 

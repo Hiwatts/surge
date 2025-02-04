@@ -1,19 +1,29 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_SURGE_XT_GUI_SURGEGUIEDITOR_H
+#define SURGE_SRC_SURGE_XT_GUI_SURGEGUIEDITOR_H
+
+#include <deque>
 
 #include "globals.h"
 
@@ -42,8 +52,19 @@
 #include <atomic>
 #include <cstdarg>
 #include <bitset>
+#include "UndoManager.h"
+
+// Change this to 0 to disable WTSE component, to disable for release: change value, test, and push
+#define INCLUDE_WT_SCRIPTING_EDITOR 1
 
 class SurgeSynthEditor;
+
+#if SURGE_INCLUDE_MELATONIN_INSPECTOR
+namespace melatonin
+{
+class Inspector;
+}
+#endif
 
 namespace Surge
 {
@@ -76,11 +97,32 @@ namespace Overlays
 struct AboutScreen;
 struct TypeinParamEditor;
 struct MiniEdit;
-
+struct Alert;
 struct OverlayWrapper;
 struct PatchStoreDialog;
 } // namespace Overlays
 } // namespace Surge
+
+#include "sst/plugininfra/keybindings.h"
+namespace sst
+{
+namespace plugininfra
+{
+template <> inline std::string keyCodeToString<juce::KeyPress>(int keyCode)
+{
+    auto k = juce::KeyPress(keyCode);
+    return k.getTextDescription().toStdString(); // according to the doc this is stable
+}
+
+template <> inline int keyCodeFromString<juce::KeyPress>(const std::string &s)
+{
+    auto k = juce::KeyPress::createFromDescription(s);
+    return k.getKeyCode();
+}
+} // namespace plugininfra
+} // namespace sst
+
+#include "SurgeGUIEditorKeyboardActions.h"
 
 class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
                        public SurgeStorage::ErrorListener,
@@ -95,9 +137,12 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     std::unique_ptr<Surge::Widgets::MainFrame> frame;
 
     std::atomic<int> errorItemCount{0};
-    std::vector<std::pair<std::string, std::string>> errorItems;
+    std::deque<std::tuple<std::string, std::string, SurgeStorage::ErrorType>> errorItems;
     std::mutex errorItemsMutex;
-    void onSurgeError(const std::string &msg, const std::string &title) override;
+    void onSurgeError(const std::string &msg, const std::string &title,
+                      const SurgeStorage::ErrorType &type) override;
+
+    std::atomic<bool> audioLatencyNotified{false};
 
     static int start_paramtag_value;
 
@@ -105,6 +150,8 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     int slowIdleCounter{0};
     bool queue_refresh;
     virtual void toggle_mod_editing();
+
+    void forceLFODisplayRebuild();
 
     static long applyParameterOffset(long index);
     static long unapplyParameterOffset(long index);
@@ -122,12 +169,18 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
         {
             synth->patchid_queue = t;
             // Looks scary but remember this only runs if audio thread is off
-            synth->processThreadunsafeOperations();
+            synth->processAudioThreadOpsWhenAudioEngineUnavailable();
             patchCountdown = 200;
         }
     }
 
   public:
+    typedef sst::plugininfra::KeyMapManager<Surge::GUI::KeyboardActions, Surge::GUI::n_kbdActions,
+                                            juce::KeyPress>
+        keymap_t;
+    std::unique_ptr<keymap_t> keyMapManager;
+
+    void setupKeymapManager();
     bool keyPressed(const juce::KeyPress &key, juce::Component *originatingComponent) override;
     std::string showShortcutDescription(const std::string &shortcutDesc,
                                         const std::string &shortcutDescMac);
@@ -135,20 +188,30 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
 
     bool debugFocus{false};
     void globalFocusChanged(juce::Component *fc) override;
+#if SURGE_INCLUDE_MELATONIN_INSPECTOR
+    std::unique_ptr<melatonin::Inspector> melatoninInspector;
+#endif
 
   protected:
     virtual void setParameter(long index, float value);
-
     // listener class
     void valueChanged(Surge::GUI::IComponentTagValue *control) override;
+
     int32_t controlModifierClicked(Surge::GUI::IComponentTagValue *control,
                                    const juce::ModifierKeys &button,
                                    bool isDoubleClickEvent) override;
     void controlBeginEdit(Surge::GUI::IComponentTagValue *control) override;
     void controlEndEdit(Surge::GUI::IComponentTagValue *control) override;
 
-    void createMIDILearnMenuEntries(juce::PopupMenu &parentMenu, bool isForMacro, int ccid,
-                                    Surge::GUI::IComponentTagValue *control);
+    enum LearnMode
+    {
+        param_cc = 0,
+        macro_cc,
+        param_note
+    };
+
+    void createMIDILearnMenuEntries(juce::PopupMenu &parentMenu, const LearnMode learn_mode,
+                                    const int ccid, Surge::GUI::IComponentTagValue *control);
 
     void changeSelectedOsc(int value);
     void changeSelectedScene(int value);
@@ -177,6 +240,13 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     // adjust
     int current_scene = 0, current_osc[n_scenes] = {0, 0}, current_fx = 0;
 
+    int getCurrentScene() { return current_scene; }
+    int getCurrentLFOIDInEditor()
+    {
+        auto lfo_id = modsource_editor[current_scene] - ms_lfo1;
+        return lfo_id;
+    }
+
     /*
      * This is the hack to deal with the send return stacking
      */
@@ -189,13 +259,19 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
 
     uint64_t lastObservedMidiNoteEventCount{0};
 
+    modsources getSelectedModsource() { return modsource; }
+    void setModsourceSelected(modsources ms, int ms_idx = 0);
+
+    SurgeSynthesizer *synth = nullptr;
+
+    void forceLfoDisplayRepaint();
+
   private:
     void openOrRecreateEditor();
     std::unique_ptr<Surge::Overlays::OverlayComponent> makeStorePatchDialog();
     void close_editor();
     bool isControlVisible(ControlGroup controlGroup, int controlGroupEntry);
     void repushAutomationFor(Parameter *p);
-    SurgeSynthesizer *synth = nullptr;
     bool editor_open = false;
     bool mod_editor = false;
     modsources modsource = ms_lfo1, modsource_editor[n_scenes] = {ms_lfo1, ms_lfo1};
@@ -204,7 +280,10 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     int fxbypass_tag = 0, f1subtypetag = 0, f2subtypetag = 0, filterblock_tag = 0, fmconfig_tag = 0;
     double lastTempo = 0;
     int lastTSNum = 0, lastTSDen = 0;
+    int lastOverlayRefresh = 0;
     void adjustSize(float &width, float &height) const;
+
+    void update_deform_type(Parameter *p, int type);
 
     struct patchdata
     {
@@ -216,7 +295,6 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
 
     void setBitmapZoomFactor(float zf);
     void showTooLargeZoomError(double width, double height, float zf) const;
-    void showMinimumZoomError() const;
 
     /*
     ** Zoom Implementation
@@ -234,7 +312,7 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
 
   public:
     void populateDawExtraState(SurgeSynthesizer *synth);
-    void loadFromDAWExtraState(SurgeSynthesizer *synth);
+    void loadFromDawExtraState(SurgeSynthesizer *synth);
 
     void setZoomCallback(std::function<void(SurgeGUIEditor *, bool resizeWindow)> f)
     {
@@ -245,6 +323,7 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     void setZoomFactor(float zf);
     void setZoomFactor(float zf, bool resizeWindow);
     void resizeWindow(float zf);
+    void moveTopLeftTo(float tx, float ty);
     bool doesZoomFitToScreen(float zf,
                              float &correctedZf); // returns true if it fits; false if not; sets
                                                   // correctedZF to right size in either case
@@ -260,7 +339,11 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     void showZoomMenu(const juce::Point<int> &where, Surge::GUI::IComponentTagValue *launchFrom);
     void showLfoMenu(const juce::Point<int> &where, Surge::GUI::IComponentTagValue *launchFrom);
 
-    juce::PopupMenu::Options optionsForPosition(const juce::Point<int> &where);
+    void addEnvTrigOptions(juce::PopupMenu &, int);
+
+    juce::PopupMenu::Options popupMenuOptions(const juce::Point<int> &where);
+    juce::PopupMenu::Options popupMenuOptions(const juce::Component *c = nullptr,
+                                              bool useComponentBounds = true);
 
     void showHTML(const std::string &s);
 
@@ -288,6 +371,7 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     }
 
     std::string midiMappingToHtml();
+    std::string patchToHtml(bool includeDefaults = false);
 
     // These are unused right now
     enum SkinInspectorFlags
@@ -322,9 +406,14 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
         PATCH_BROWSER,
         MODULATION_EDITOR,
         FORMULA_EDITOR,
-        WAVETABLESCRIPTING_EDITOR, // This code is here but incomplete, and off in XT 1.0
+        WT_EDITOR,
         TUNING_EDITOR,
         WAVESHAPER_ANALYZER,
+        FILTER_ANALYZER,
+        OSCILLOSCOPE,
+        KEYBINDINGS_EDITOR,
+        ACTION_HISTORY,
+        OPEN_SOUND_CONTROL_SETTINGS,
 
         n_overlay_tags,
     };
@@ -361,7 +450,9 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
         std::function<void()> onClose = []() {}, bool forceModal = false);
     std::unordered_map<OverlayTags, std::unique_ptr<Surge::Overlays::OverlayWrapper>> juceOverlays;
     std::vector<std::unique_ptr<Surge::Overlays::OverlayWrapper>> juceDeleteOnIdle;
+    std::unordered_map<OverlayTags, bool> isTornOut;
     void rezoomOverlays();
+    void frontNonModalOverlays();
 
     void dismissEditorOfType(OverlayTags ofType);
     bool isAnyOverlayPresent(OverlayTags tag)
@@ -385,18 +476,24 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
         refreshAndMorphOverlayWithOpenClose(tag, tag);
     }
     void refreshAndMorphOverlayWithOpenClose(OverlayTags tag, OverlayTags newTag);
+    bool updateOverlayContentIfPresent(OverlayTags tag);
 
     void updateWaveshaperOverlay(); // this is the only overlay which updates from patch values
 
     std::string getDisplayForTag(long tag, bool external = false, float value = 0);
     float getF01FromString(long tag, const std::string &s);
     float getModulationF01FromString(long tag, const std::string &s);
+    std::string getAccessibleModulationVoiceover(long tag);
 
     void queuePatchFileLoad(const std::string &file)
     {
-        strncpy(synth->patchid_file, file.c_str(), FILENAME_MAX);
-        synth->has_patchid_file = true;
-        synth->processThreadunsafeOperations();
+        {
+            std::lock_guard<std::mutex> mg(synth->patchLoadSpawnMutex);
+            undoManager()->pushPatch();
+            strncpy(synth->patchid_file, file.c_str(), FILENAME_MAX);
+            synth->has_patchid_file = true;
+        }
+        synth->processAudioThreadOpsWhenAudioEngineUnavailable();
     }
 
     void loadPatchWithDirtyCheck(bool increment, bool isCategory, bool insideCategory = false);
@@ -413,15 +510,14 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     std::vector<DAWExtraStateStorage::EditorState::OverlayState> overlaysForNextIdle;
 
     std::deque<std::pair<std::string, int>> accAnnounceStrings;
-    void enqueueAccessibleAnnouncement(const std::string &s)
-    {
-        accAnnounceStrings.push_back({s, 3});
-    }
+    void enqueueAccessibleAnnouncement(const std::string &s);
+    void announceGuiState();
     void setAccessibilityInformationByParameter(juce::Component *c, Parameter *p,
                                                 const std::string &action);
 
-    void setAccessibilityInformationByTitleAndAction(juce::Component *c, const std::string &title,
-                                                     const std::string &action);
+    static void setAccessibilityInformationByTitleAndAction(juce::Component *c,
+                                                            const std::string &title,
+                                                            const std::string &action);
 
     Surge::Overlays::MSEGEditor::State msegEditState[n_scenes][n_lfos];
     Surge::Overlays::MSEGEditor::State mostRecentCopiedMSEGState;
@@ -431,6 +527,29 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
   public:
     bool canDropTarget(const std::string &fname); // these come as const char* from vstgui
     bool onDrop(const std::string &fname);
+
+    const std::unique_ptr<Surge::GUI::UndoManager> &undoManager();
+    void setParamFromUndo(int paramId, pdata val);
+    void pushParamToUndoRedo(int paramId, Surge::GUI::UndoManager::Target which);
+    void applyToParamForUndo(int paramId, std::function<void(Parameter *)> f);
+    void setModulationFromUndo(int paramId, modsources ms, int scene, int idx, float val,
+                               bool muted);
+    void pushModulationToUndoRedo(int paramId, modsources ms, int scene, int idx,
+                                  Surge::GUI::UndoManager::Target which);
+    void setStepSequencerFromUndo(int scene, int lfoid, const StepSequencerStorage &val);
+    void setMSEGFromUndo(int scene, int lfoid, const MSEGStorage &val);
+    void setFormulaFromUndo(int scene, int lfoid, const FormulaModulatorStorage &val);
+    void setLFONameFromUndo(int scene, int lfoid, int index, const std::string &n);
+    void setMacroNameFromUndo(int ccid, const std::string &n);
+    void setMacroValueFromUndo(int ccid, float val);
+    void setTuningFromUndo(const Tunings::Tuning &);
+    const Tunings::Tuning &getTuningForRedo();
+    const fs::path pathForCurrentPatch();
+    void ensureParameterItemIsFocused(Parameter *p);
+    void setPatchFromUndo(void *data, size_t datasz);
+
+    void playNote(char key, char vel);
+    void releaseNote(char key, char vel);
 
   private:
     juce::Rectangle<int> positionForModulationGrid(modsources entry);
@@ -467,7 +586,7 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
   private:
     std::function<void(SurgeGUIEditor *, bool resizeWindow)> zoom_callback;
     bool zoomInvalid = false;
-    int minimumZoom = 100;
+    static constexpr int minimumZoom = 25;
 
     int selectedFX[n_fx_slots];
     std::string fxPresetName[n_fx_slots];
@@ -524,9 +643,11 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     /*
      * Favorites support
      */
-    void setPatchAsFavorite(bool b);
+    void setPatchAsFavorite(const std::string &pname, bool b);
     bool isPatchFavorite();
     bool isPatchUser();
+
+    void setSpecificPatchAsFavorite(int patchid, bool b);
 
     /*
      * Modulation Client API
@@ -544,23 +665,23 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
                   bool mute) override;
     void modCleared(long ptag, modsources modsource, int modsourceScene, int index) override;
 
-  private:
+    SurgePatch &getPatch() { return synth->storage.getPatch(); }
+    SurgeStorage *getStorage() { return &(synth->storage); }
+
     std::unique_ptr<Surge::Widgets::EffectChooser> effectChooser;
 
+  private:
     Surge::GUI::IComponentTagValue *statusMPE = nullptr, *statusTune = nullptr,
-                                   *statusZoom = nullptr;
+                                   *statusZoom = nullptr, *actionUndo = nullptr,
+                                   *actionRedo = nullptr;
     std::unique_ptr<Surge::Overlays::AboutScreen> aboutScreen;
 
     std::unique_ptr<juce::Drawable> midiLearnOverlay;
 
-#if BUILD_IS_DEBUG
-    std::unique_ptr<juce::Label> debugLabel;
-#endif
-
     std::unique_ptr<Surge::Overlays::TypeinParamEditor> typeinParamEditor;
-    bool setParameterFromString(Parameter *p, const std::string &s);
+    bool setParameterFromString(Parameter *p, const std::string &s, std::string &errMsg);
     bool setParameterModulationFromString(Parameter *p, modsources ms, int modsourceScene,
-                                          int modidx, const std::string &s);
+                                          int modidx, const std::string &s, std::string &errMsg);
     bool setControlFromString(modsources ms, const std::string &s);
     void hideTypeinParamEditor();
     friend struct Surge::Overlays::TypeinParamEditor;
@@ -577,8 +698,16 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     void promptForMiniEdit(const std::string &value, const std::string &prompt,
                            const std::string &title, const juce::Point<int> &where,
                            std::function<void(const std::string &)> onOK,
-                           juce::Component *returnFocusTo = nullptr);
+                           juce::Component *returnFocusTo /* can be nullptr */);
 
+    /*
+     * Weak pointers to some logical items for focus return
+     */
+    juce::Component *mpeStatus{nullptr}, *zoomStatus{nullptr}, *tuneStatus{nullptr},
+        *mainMenu{nullptr}, *lfoMenuButton{nullptr}, *undoButton{nullptr}, *redoButton{nullptr},
+        *lfoRateSlider{nullptr};
+    Surge::Widgets::ModulatableControlInterface *filterCutoffSlider[2]{nullptr, nullptr},
+        *filterResonanceSlider[2]{nullptr, nullptr};
     /*
      * This is the JUCE component management
      */
@@ -649,16 +778,14 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     std::unique_ptr<juce::Label> fxPresetLabel;
 
   public:
-    std::string modulatorName(int ms, bool forButton, int forScene = -1);
-    std::string modulatorIndexExtension(int scene, int ms, int index, bool shortV = false);
-    std::string modulatorNameWithIndex(int scene, int ms, int index, bool forButton, bool useScene,
-                                       bool baseNameOnly = false);
-
   private:
     Parameter *typeinEditTarget = nullptr;
     int typeinModSource = -1;
 
+  public:
     std::unique_ptr<Surge::Widgets::OscillatorWaveformDisplay> oscWaveform;
+
+  private:
     std::unique_ptr<Surge::Widgets::NumberField> polydisp;
     std::unique_ptr<Surge::Widgets::NumberField> splitpointControl;
 
@@ -679,11 +806,14 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     float blinktimer = 0;
     bool blinkstate = false;
     int firstIdleCountdown = 0;
+    int firstErrorIdleCountdown{30};
+    int sendStructureChangeIn = -1;
 
     juce::PopupMenu makeSmoothMenu(const juce::Point<int> &where,
                                    const Surge::Storage::DefaultKey &key, int defaultValue,
                                    std::function<void(Modulator::SmoothingMode)> setSmooth);
 
+    void makeMpeTimbreMenu(juce::PopupMenu &menu, const bool asSubMenu);
     juce::PopupMenu makeMpeMenu(const juce::Point<int> &rect, bool showhelp);
     juce::PopupMenu makeTuningMenu(const juce::Point<int> &rect, bool showhelp);
     juce::PopupMenu makeZoomMenu(const juce::Point<int> &rect, bool showhelp);
@@ -692,11 +822,17 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     juce::PopupMenu makePatchDefaultsMenu(const juce::Point<int> &rect);
     juce::PopupMenu makeValueDisplaysMenu(const juce::Point<int> &rect);
     juce::PopupMenu makeWorkflowMenu(const juce::Point<int> &rect);
+    juce::PopupMenu makeAccesibilityMenu(const juce::Point<int> &rect);
     juce::PopupMenu makeDataMenu(const juce::Point<int> &rect);
     juce::PopupMenu makeMidiMenu(const juce::Point<int> &rect);
     juce::PopupMenu makeDevMenu(const juce::Point<int> &rect);
     juce::PopupMenu makeLfoMenu(const juce::Point<int> &rect);
     juce::PopupMenu makeMonoModeOptionsMenu(const juce::Point<int> &rect, bool updateDefaults);
+    juce::PopupMenu makeOSCMenu(const juce::Point<int> &where);
+
+    void makeScopeEntry(juce::PopupMenu &menu);
+
+    void setRecommendedAccessibility();
 
   public:
     void addHelpHeaderTo(const std::string &lab, const std::string &hu, juce::PopupMenu &m) const;
@@ -713,9 +849,32 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     void setUseKeyboardShortcuts(bool b);
     void toggleUseKeyboardShortcuts();
 
-    std::unique_ptr<juce::AlertWindow> okcWithToggleAlertWindow;
-    std::unique_ptr<juce::ToggleButton> okcWithToggleToggleButton;
-    std::function<void()> okcWithToggleCallback;
+    enum AlertButtonStyle
+    {
+        OK_CANCEL,
+        YES_NO,
+        OK
+    };
+
+    void alertBox(const std::string &title, const std::string &prompt, std::function<void()> onOk,
+                  std::function<void()> onCancel, AlertButtonStyle buttonStyle);
+
+    void alertOKCancel(const std::string &title, const std::string &prompt,
+                       std::function<void()> onOk, std::function<void()> onCancel = nullptr)
+    {
+        alertBox(title, prompt, onOk, onCancel, AlertButtonStyle::OK_CANCEL);
+    }
+    void alertYesNo(const std::string &title, const std::string &prompt, std::function<void()> onOk,
+                    std::function<void()> onCancel = nullptr)
+    {
+        alertBox(title, prompt, onOk, onCancel, AlertButtonStyle::YES_NO);
+    }
+    void messageBox(const std::string &title, const std::string &prompt)
+    {
+        alertBox(title, prompt, nullptr, nullptr, AlertButtonStyle::OK);
+    }
+
+    std::unique_ptr<Surge::Overlays::Alert> alert;
 
     enum AskAgainStates
     {
@@ -728,7 +887,8 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     bool promptForOKCancelWithDontAskAgain(const ::std::string &title, const std::string &msg,
                                            Surge::Storage::DefaultKey dontAskAgainKey,
                                            std::function<void()> okCallback,
-                                           std::string ynMessage = "Don't ask me again");
+                                           std::string ynMessage = "Don't ask me again",
+                                           AskAgainStates askAgainDefault = DUNNO);
 
   private:
     bool scannedForMidiPresets = false;
@@ -757,17 +917,23 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
     void resetComponentTracking();
     void removeUnusedTrackedComponents();
 
+  public:
+    void promptForUserValueEntry(Parameter *p, juce::Component *c, int modsource, int modScene,
+                                 int modindex);
+    bool promptForUserValueEntry(Surge::Widgets::ModulatableControlInterface *mci);
+    bool promptForUserValueEntry(uint32_t tag, juce::Component *c);
     void promptForUserValueEntry(Parameter *p, juce::Component *c)
     {
         promptForUserValueEntry(p, c, -1, -1, -1);
     }
-    void promptForUserValueEntry(Parameter *p, juce::Component *c, int modsource, int modScene,
-                                 int modindex);
 
     /*
     ** Skin support
     */
+  public:
     Surge::GUI::Skin::ptr_t currentSkin;
+
+  private:
     void setupSkinFromEntry(const Surge::GUI::SkinDB::Entry &entry);
     void reloadFromSkin();
     Surge::GUI::IComponentTagValue *
@@ -906,3 +1072,5 @@ class SurgeGUIEditor : public Surge::GUI::IComponentTagValue::Listener,
                                            "Control 126 Mono Mode Off",
                                            "Control 127 Mono Mode On"};
 };
+
+#endif // SURGE_SRC_SURGE_XT_GUI_SURGEGUIEDITOR_H

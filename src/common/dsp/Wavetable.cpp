@@ -1,9 +1,32 @@
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 #include "Wavetable.h"
 #include <assert.h>
 #include "DSPUtils.h"
 #include <vembertech/basic_dsp.h>
-#include <vembertech/vt_dsp_endian.h>
 #include "SurgeStorage.h"
+
+#include "sst/basic-blocks/mechanics/endian-ops.h"
+namespace mech = sst::basic_blocks::mechanics;
 
 #if WINDOWS
 #include <intrin.h>
@@ -71,7 +94,6 @@ int GetWTIndex(int WaveIdx, int WaveSize, int NumWaves, int MipMap, int Padding 
         Index += Offset >> i;
         Index += Padding * NumWaves;
     }
-    assert((Index + WaveSize - 1) < max_wtable_samples);
     return Index;
 }
 
@@ -156,9 +178,9 @@ bool Wavetable::BuildWT(void *wdata, wt_header &wh, bool AppendSilence)
 {
     assert(wdata);
 
-    flags = vt_read_int16LE(wh.flags);
-    n_tables = vt_read_int16LE(wh.n_tables);
-    size = vt_read_int32LE(wh.n_samples);
+    flags = mech::endian_read_int16LE(wh.flags);
+    n_tables = mech::endian_read_int16LE(wh.n_tables);
+    size = mech::endian_read_int32LE(wh.n_samples);
 
     size_t req_size = RequiredWTSize(size, n_tables);
 
@@ -200,15 +222,14 @@ bool Wavetable::BuildWT(void *wdata, wt_header &wh, bool AppendSilence)
     for (int j = 0; j < this->n_tables; j++)
     {
         TableF32WeakPointers[0][j] = TableF32Data + GetWTIndex(j, size, n_tables, 0);
-        TableI16WeakPointers[0][j] =
-            TableI16Data + GetWTIndex(j, size, n_tables, 0,
-                                      FIRipolI16_N); // + padding for a "non-wrapping" interpolator
+        // + padding for a non-wrapping interpolator
+        TableI16WeakPointers[0][j] = TableI16Data + GetWTIndex(j, size, n_tables, 0, FIRipolI16_N);
     }
-    for (int j = this->n_tables; j < min_F32_tables;
-         j++) // W-TABLE need at least 3 tables to work properly
+    for (int j = this->n_tables; j < min_F32_tables; j++)
     {
         unsigned int s = this->size;
         int l = 0;
+
         while (s && (l < max_mipmap_levels))
         {
             TableF32WeakPointers[l][j] = TableF32Data + GetWTIndex(j, size, n_tables, l);
@@ -222,23 +243,26 @@ bool Wavetable::BuildWT(void *wdata, wt_header &wh, bool AppendSilence)
     {
         for (int j = 0; j < wdata_tables; j++)
         {
-            vt_copyblock_W_LE(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
-                              &((short *)wdata)[this->size * j], this->size);
+            mech::endian_copyblock16LE(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
+                                       &((short *)wdata)[this->size * j], this->size);
             if (this->flags & wtf_int16_is_16)
             {
-                i16toi15_block(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
-                               &this->TableI16WeakPointers[0][j][FIRoffsetI16], this->size);
+                i162float_block(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
+                                this->TableF32WeakPointers[0][j], this->size);
             }
-            i152float_block(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
-                            this->TableF32WeakPointers[0][j], this->size);
+            else
+            {
+                i152float_block(&this->TableI16WeakPointers[0][j][FIRoffsetI16],
+                                this->TableF32WeakPointers[0][j], this->size);
+            }
         }
     }
     else
     {
         for (int j = 0; j < wdata_tables; j++)
         {
-            vt_copyblock_DW_LE((int *)this->TableF32WeakPointers[0][j],
-                               &((int *)wdata)[this->size * j], this->size);
+            mech::endian_copyblock32LE((int32_t *)this->TableF32WeakPointers[0][j],
+                                       &((int32_t *)wdata)[this->size * j], this->size);
             float2i15_block(this->TableF32WeakPointers[0][j],
                             &this->TableI16WeakPointers[0][j][FIRoffsetI16], this->size);
         }
@@ -248,7 +272,7 @@ bool Wavetable::BuildWT(void *wdata, wt_header &wh, bool AppendSilence)
     for (int j = wdata_tables; j < this->n_tables; j++)
     {
         memset(this->TableF32WeakPointers[0][j], 0, this->size * sizeof(float));
-        memset(this->TableI16WeakPointers[0][j], 0, this->size * sizeof(short));
+        memset(this->TableI16WeakPointers[0][j], 0, (this->size + FIRoffsetI16) * sizeof(short));
     }
 
     for (int j = 0; j < wdata_tables; j++)
@@ -340,5 +364,5 @@ void Wavetable::MipMapWT()
     // TODO I16 mipmaps end up out of phase
     // The click/knot/bug probably results from the fact that there is no padding in the beginning,
     // so it becomes out of phase at mipmap switch - makes sense because as they were off by a whole
-    // sample at the mipmap switch, which can not be explained by the halfrate filter
+    // sample at the mipmap switch, which cannot be explained by the half rate filter
 }

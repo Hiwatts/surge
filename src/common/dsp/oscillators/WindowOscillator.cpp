@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "WindowOscillator.h"
 #include "DSPUtils.h"
@@ -19,7 +26,7 @@
 #include <cstdint>
 #include "DebugHelpers.h"
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #include <intrin.h>
 #else
 namespace
@@ -31,14 +38,7 @@ inline bool _BitScanReverse(unsigned long *result, unsigned long bits)
 }
 } // anonymous namespace
 #endif
-int Float2Int(float x)
-{
-#ifdef ARM_NEON
-    return int(x + 0.5f);
-#else
-    return _mm_cvt_ss2si(_mm_load_ss(&x));
-#endif
-}
+int Float2Int(float x) { return int(x + 0.5f); }
 WindowOscillator::WindowOscillator(SurgeStorage *storage, OscillatorStorage *oscdata,
                                    pdata *localcopy)
     : Oscillator(storage, oscdata, localcopy), lp(storage), hp(storage)
@@ -157,7 +157,7 @@ void WindowOscillator::init_ctrltypes()
     oscdata->p[win_unison_detune].set_name("Unison Detune");
     oscdata->p[win_unison_detune].set_type(ct_oscspread);
     oscdata->p[win_unison_voices].set_name("Unison Voices");
-    oscdata->p[win_unison_voices].set_type(ct_osccountWT);
+    oscdata->p[win_unison_voices].set_type(ct_osccount);
 }
 
 void WindowOscillator::init_default_values()
@@ -181,15 +181,91 @@ void WindowOscillator::init_default_values()
 inline unsigned int BigMULr16(unsigned int a, unsigned int b)
 {
     // 64-bit unsigned multiply with right shift by 16 bits
-#ifdef _MSC_VER
-    const auto c{__emulu(a, b)};
-#else
     const auto c{std::uint64_t{a} * std::uint64_t{b}};
-#endif
     return c >> 16u;
 }
 
-void WindowOscillator::ProcessWindowOscs(bool stereo, bool FM)
+void WindowOscillator::processSamplesForDisplay(float *samples, int size, bool real)
+{
+    if (!real)
+    {
+
+        // formant
+
+        float formant = oscdata->p[win_formant].val.f;
+        float newSamples[64];
+
+        float mult = pow(2.f, formant / 12.f);
+
+        for (int i = 0; i < size; i++)
+        {
+            float pos = (float)i * mult;
+            int from = (int)(pos);
+
+            float proc = pos - (float)from;
+            from = from % (size);
+            int to = (from + 1) % size;
+            newSamples[i] = samples[from] * (1.f - proc) + samples[to] * proc;
+        }
+
+        int window = limit_range(oscdata->p[win_window].val.i, 0, 8);
+        int windowSize = storage->WindowWT.size;
+
+        for (int i = 0; i < size; i++)
+        {
+            samples[i] = newSamples[i];
+        }
+
+        // apply window
+
+        for (int i = 0; i < size; i++)
+        {
+            float windowPos = ((float)i / (float)size); // correct
+            windowPos *= (float)windowSize;
+            float v = storage->WindowWT.TableI16WeakPointers[0][window][(int)windowPos];
+            samples[i] = samples[i] * v * 0.00006103515625; // there is most likely a better way
+            //  of doing this ( divide by 2pow13)
+        }
+
+        // filters
+
+        for (int k = 0; k < size; k += BLOCK_SIZE)
+        {
+            float blockSamples[BLOCK_SIZE];
+
+            for (int i = 0; i < BLOCK_SIZE; i++)
+            {
+                int s = i + k;
+                blockSamples[i] = s < size ? samples[s] : 0;
+            }
+
+            if (!oscdata->p[win_lowcut].deactivated)
+                hp.process_block(blockSamples, samples);
+            if (!oscdata->p[win_highcut].deactivated)
+                lp.process_block(blockSamples, samples);
+
+            for (int i = 0; i < BLOCK_SIZE; i++)
+            {
+                int s = i + k;
+                if (s < size)
+                {
+                    samples[s] = blockSamples[i];
+                }
+            }
+        }
+    }
+    else
+    {
+
+        // todo populate samples with process_block()
+        for (int i = 0; i < size; i++)
+        {
+            samples[i] = 0;
+        }
+    }
+};
+
+template <bool FM, bool Full16> void WindowOscillator::ProcessWindowOscs(bool stereo)
 {
     const unsigned int M0Mask = 0x07f8;
     unsigned int SizeMask = (oscdata->wt.size << 16) - 1;
@@ -290,40 +366,53 @@ void WindowOscillator::ProcessWindowOscs(bool stereo, bool FM)
                 unsigned int MPos = FPos >> (16 + MipMapB);
                 unsigned int MSPos = ((FPos >> (8 + MipMapB)) & 0xFF);
 
-                __m128i Wave = _mm_madd_epi16(_mm_load_si128(((__m128i *)sinctableI16 + MSPos)),
-                                              _mm_loadu_si128((__m128i *)&WaveAdr[MPos]));
-                __m128i WaveP1 = _mm_madd_epi16(_mm_load_si128(((__m128i *)sinctableI16 + MSPos)),
-                                                _mm_loadu_si128((__m128i *)&WaveAdrP1[MPos]));
+                SIMD_M128I Wave = SIMD_MM(madd_epi16)(
+                    SIMD_MM(load_si128)(((SIMD_M128I *)storage->sinctableI16 + MSPos)),
+                    SIMD_MM(loadu_si128)((SIMD_M128I *)&WaveAdr[MPos]));
+                SIMD_M128I WaveP1 = SIMD_MM(madd_epi16)(
+                    SIMD_MM(load_si128)(((SIMD_M128I *)storage->sinctableI16 + MSPos)),
+                    SIMD_MM(loadu_si128)((SIMD_M128I *)&WaveAdrP1[MPos]));
 
-                __m128i Win = _mm_madd_epi16(_mm_load_si128(((__m128i *)sinctableI16 + WinSPos)),
-                                             _mm_loadu_si128((__m128i *)&WinAdr[WinPos]));
+                SIMD_M128I Win = SIMD_MM(madd_epi16)(
+                    SIMD_MM(load_si128)(((SIMD_M128I *)storage->sinctableI16 + WinSPos)),
+                    SIMD_MM(loadu_si128)((SIMD_M128I *)&WinAdr[WinPos]));
 
                 // Sum
                 int iWin alignas(16)[4], iWaveP1 alignas(16)[4], iWave alignas(16)[4];
 #if MAC
                 // this should be very fast on C2D/C1D (and there are no macs with K8's)
-                iWin[0] = _mm_cvtsi128_si32(Win);
-                iWin[1] = _mm_cvtsi128_si32(_mm_shuffle_epi32(Win, _MM_SHUFFLE(1, 1, 1, 1)));
-                iWin[2] = _mm_cvtsi128_si32(_mm_shuffle_epi32(Win, _MM_SHUFFLE(2, 2, 2, 2)));
-                iWin[3] = _mm_cvtsi128_si32(_mm_shuffle_epi32(Win, _MM_SHUFFLE(3, 3, 3, 3)));
-                iWave[0] = _mm_cvtsi128_si32(Wave);
-                iWave[1] = _mm_cvtsi128_si32(_mm_shuffle_epi32(Wave, _MM_SHUFFLE(1, 1, 1, 1)));
-                iWave[2] = _mm_cvtsi128_si32(_mm_shuffle_epi32(Wave, _MM_SHUFFLE(2, 2, 2, 2)));
-                iWave[3] = _mm_cvtsi128_si32(_mm_shuffle_epi32(Wave, _MM_SHUFFLE(3, 3, 3, 3)));
-                iWaveP1[0] = _mm_cvtsi128_si32(WaveP1);
-                iWaveP1[1] = _mm_cvtsi128_si32(_mm_shuffle_epi32(WaveP1, _MM_SHUFFLE(1, 1, 1, 1)));
-                iWaveP1[2] = _mm_cvtsi128_si32(_mm_shuffle_epi32(WaveP1, _MM_SHUFFLE(2, 2, 2, 2)));
-                iWaveP1[3] = _mm_cvtsi128_si32(_mm_shuffle_epi32(WaveP1, _MM_SHUFFLE(3, 3, 3, 3)));
+                iWin[0] = SIMD_MM(cvtsi128_si32)(Win);
+                iWin[1] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(Win, SIMD_MM_SHUFFLE(1, 1, 1, 1)));
+                iWin[2] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(Win, SIMD_MM_SHUFFLE(2, 2, 2, 2)));
+                iWin[3] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(Win, SIMD_MM_SHUFFLE(3, 3, 3, 3)));
+                iWave[0] = SIMD_MM(cvtsi128_si32)(Wave);
+                iWave[1] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(Wave, SIMD_MM_SHUFFLE(1, 1, 1, 1)));
+                iWave[2] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(Wave, SIMD_MM_SHUFFLE(2, 2, 2, 2)));
+                iWave[3] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(Wave, SIMD_MM_SHUFFLE(3, 3, 3, 3)));
+                iWaveP1[0] = SIMD_MM(cvtsi128_si32)(WaveP1);
+                iWaveP1[1] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(WaveP1, SIMD_MM_SHUFFLE(1, 1, 1, 1)));
+                iWaveP1[2] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(WaveP1, SIMD_MM_SHUFFLE(2, 2, 2, 2)));
+                iWaveP1[3] = SIMD_MM(cvtsi128_si32)(
+                    SIMD_MM(shuffle_epi32)(WaveP1, SIMD_MM_SHUFFLE(3, 3, 3, 3)));
 
 #else
-                _mm_store_si128((__m128i *)&iWin, Win);
-                _mm_store_si128((__m128i *)&iWave, Wave);
-                _mm_store_si128((__m128i *)&iWaveP1, WaveP1);
+                SIMD_MM(store_si128)((SIMD_M128I *)&iWin, Win);
+                SIMD_MM(store_si128)((SIMD_M128I *)&iWave, Wave);
+                SIMD_MM(store_si128)((SIMD_M128I *)&iWaveP1, WaveP1);
 #endif
 
                 iWin[0] = (iWin[0] + iWin[1] + iWin[2] + iWin[3]) >> 13;
-                iWave[0] = (iWave[0] + iWave[1] + iWave[2] + iWave[3]) >> 13;
-                iWaveP1[0] = (iWaveP1[0] + iWaveP1[1] + iWaveP1[2] + iWaveP1[3]) >> 13;
+                iWave[0] = (iWave[0] + iWave[1] + iWave[2] + iWave[3]) >> (13 + (Full16 ? 1 : 0));
+                iWaveP1[0] =
+                    (iWaveP1[0] + iWaveP1[1] + iWaveP1[2] + iWaveP1[3]) >> (13 + (Full16 ? 1 : 0));
 
                 iWave[0] = (int)((1.f - FTable) * iWave[0] + FTable * iWaveP1[0]);
 
@@ -381,7 +470,7 @@ void WindowOscillator::process_block(float pitch, float drift, bool stereo, bool
         float f = storage->note_to_pitch(pitch + drift * Window.driftLFO[l].val() +
                                          Detune * (DetuneOffset + DetuneBias * (float)l));
         int Ratio = Float2Int(8.175798915f * 32768.f * f * (float)(storage->WindowWT.size) *
-                              samplerate_inv); // (65536.f*0.5f), 0.5 for oversampling
+                              storage->samplerate_inv); // (65536.f*0.5f), 0.5 for oversampling
 
         Window.Ratio[l] = Ratio;
 
@@ -396,7 +485,7 @@ void WindowOscillator::process_block(float pitch, float drift, bool stereo, bool
                                                  Detune * (DetuneOffset + DetuneBias * (float)l));
                 int Ratio =
                     Float2Int(8.175798915f * 32768.f * f * fmadj * (float)(storage->WindowWT.size) *
-                              samplerate_inv); // (65536.f*0.5f), 0.5 for oversampling
+                              storage->samplerate_inv); // (65536.f*0.5f), 0.5 for oversampling
 
                 Window.FMRatio[l][i] = Ratio;
                 FMdepth[l].process();
@@ -404,28 +493,54 @@ void WindowOscillator::process_block(float pitch, float drift, bool stereo, bool
         }
     }
 
-    ProcessWindowOscs(stereo, FM);
+    bool is16 = oscdata->wt.flags & wtf_int16_is_16;
+
+    if (FM)
+    {
+        if (is16)
+        {
+            ProcessWindowOscs<true, true>(stereo);
+        }
+        else
+        {
+            ProcessWindowOscs<true, false>(stereo);
+        }
+    }
+    else
+    {
+        if (is16)
+        {
+            ProcessWindowOscs<false, true>(stereo);
+        }
+        else
+        {
+            ProcessWindowOscs<false, false>(stereo);
+        }
+    }
 
     // int32 -> float conversion
-    __m128 scale = _mm_load1_ps(&OutAttenuation);
+    auto scale = SIMD_MM(load1_ps)(&OutAttenuation);
     {
         // SSE2 path
         if (stereo)
         {
             for (int i = 0; i < BLOCK_SIZE_OS; i += 4)
             {
-                _mm_store_ps(&output[i],
-                             _mm_mul_ps(_mm_cvtepi32_ps(*(__m128i *)&IOutputL[i]), scale));
-                _mm_store_ps(&outputR[i],
-                             _mm_mul_ps(_mm_cvtepi32_ps(*(__m128i *)&IOutputR[i]), scale));
+                SIMD_MM(store_ps)
+                (&output[i],
+                 SIMD_MM(mul_ps)(SIMD_MM(cvtepi32_ps)(*(SIMD_M128I *)&IOutputL[i]), scale));
+                SIMD_MM(store_ps)
+                (&outputR[i],
+                 SIMD_MM(mul_ps)(SIMD_MM(cvtepi32_ps)(*(SIMD_M128I *)&IOutputR[i]), scale));
             }
         }
         else
         {
             for (int i = 0; i < BLOCK_SIZE_OS; i += 4)
             {
-                _mm_store_ps(&output[i],
-                             _mm_mul_ps(_mm_cvtepi32_ps(*(__m128i *)&IOutputL[i]), scale));
+                SIMD_MM(store_ps)
+                (&output[i],
+                 SIMD_MM(mul_ps)(SIMD_MM(cvtepi32_ps)(*(SIMD_M128I *)&IOutputL[i]), scale));
             }
         }
     }

@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "SkinModel.h"
 #include "resource.h"
@@ -47,9 +54,15 @@ Component MultiSwitch =
                        "to reach to, valid values are from 0 to 'frames'"})
         .withProperty(Component::BACKGROUND, {"image", "bg_resource", "bg_id"},
                       {"Base image of the switch"})
-        .withProperty(Component::DRAGGABLE_HSWITCH, {"draggable"},
+        .withProperty(Component::DRAGGABLE_SWITCH, {"draggable"},
                       {"Is the switch draggable as a slider via mouse/touch or not. Valid values: "
                        "true, false"})
+        .withProperty(
+            Component::MOUSEWHEELABLE_SWITCH, {"mousewheelable"},
+            {"Is the switch mousewheelable as a slider via mouse/touch or not. Valid values: "
+             "true, false"})
+        .withProperty(Component::ACCESSIBLE_AS_MOMENTARY_BUTTON, {"accessible_as_buttons"},
+                      {"Is the accessible display buttons (true) or radio buttons (false, def)"})
         .withProperty(Component::HOVER_IMAGE, {"hover_image"},
                       {"Hover image of the switch - required if you "
                        "set the base image and want feedback on mouse hover"})
@@ -83,10 +96,13 @@ Component Slider =
         .withProperty(Component::HIDE_SLIDER_LABEL, {"hide_slider_label"},
                       {"Hides the parameter name label"});
 
-Component Switch = Component("CSwitchControl")
-                       .withAlias("Switch")
-                       .withProperty(Component::BACKGROUND, {"image", "bg_resource", "bg_id"},
-                                     {"Base image of the switch"});
+Component Switch =
+    Component("CSwitchControl")
+        .withAlias("Switch")
+        .withProperty(Component::BACKGROUND, {"image", "bg_resource", "bg_id"},
+                      {"Base image of the switch"})
+        .withProperty(Component::ACCESSIBLE_AS_MOMENTARY_BUTTON, {"accessible_as_buttons"},
+                      {"Is the accessible display buttons (true) or radio buttons (false, def)"});
 
 Component FilterSelector =
     Component("FilterSelector")
@@ -153,7 +169,7 @@ Component Label =
     Component("Internal Label")
         .withProperty(Component::TEXT, {"text"}, {"Arbitrary text to be displayed on the label."})
         .withProperty(Component::CONTROL_TEXT, {"control_text"},
-                      {"Text tied to a particular Surge parameter. Use skin component connector "
+                      {"Text tied to a particular Surge XT parameter. Use skin component connector "
                        "name as a value. Overrules arbitrary text set with 'text' property"})
         .withProperty(Component::TEXT_ALIGN, {"text_align"}, {"Valid values: left, center, right"})
         .withProperty(Component::FONT_SIZE, {"font_size"}, {"Font size in points, integer only"})
@@ -171,7 +187,7 @@ Component Label =
                       {"Resource name of the image to be displayed by the label. Overrides "
                        "background and frame/border colors"});
 
-// ToDo - obvioulsy expand properties
+// ToDo - obviously expand properties
 Component WaveShaperSelector = Component("WaveShaperSelector");
 
 } // namespace Components
@@ -399,6 +415,9 @@ Connector waveshaper_jog =
 Connector waveshaper_analyze = Connector("filter.waveshaper_preview", 408, 375, 11, 11,
                                          Components::Switch, Connector::ANALYZE_WAVESHAPE)
                                    .withBackground(IDB_WAVESHAPER_ANALYSIS);
+Connector filter_analyze = Connector("filter.filter_preview", 519, 197, 11, 11, Components::Switch,
+                                     Connector::ANALYZE_FILTERS)
+                               .withBackground(IDB_FILTER_ANALYSIS);
 
 Connector highpass = Connector("filter.highpass", 353, 301).asVertical().asWhite();
 } // namespace Filter
@@ -493,7 +512,8 @@ Connector lfo_title_label =
     Connector("lfo.title", 6, 498, 11, 71, Components::Custom, Connector::LFO_LABEL);
 Connector lfo_presets =
     Connector("lfo.presets", 6, 484, 13, 11, Components::Switch, Connector::LFO_MENU)
-        .withBackground(IDB_LFO_PRESET_MENU);
+        .withBackground(IDB_LFO_PRESET_MENU)
+        .withProperty(Component::ACCESSIBLE_AS_MOMENTARY_BUTTON, true);
 
 Connector lfo_main_panel = Connector("lfo.main.panel", 28, 478, Components::Group);
 Connector rate = Connector("lfo.rate", 0, 0).asHorizontal().inParent("lfo.main.panel");
@@ -506,13 +526,14 @@ Connector trigger_mode = Connector("lfo.trigger_mode", 172, 484, 51, 39, Compone
 Connector unipolar = Connector("lfo.unipolar", 172, 546, 51, 14, Components::Switch)
                          .withBackground(IDB_LFO_UNIPOLAR);
 
-// combined LFO shape AND LFO display - TODO: split them to individual skin connectors at some
-// point!
+// combined LFO shape AND LFO display
+// TODO: split them to individual skin connectors at some point!
 Connector shape = Connector("lfo.shape", 235, 480, 359, 84, Components::LFODisplay);
 
 Connector mseg_editor =
     Connector("lfo.mseg_editor", 597, 484, 11, 11, Components::Switch, Connector::MSEG_EDITOR_OPEN)
-        .withBackground(IDB_LFO_MSEG_EDIT);
+        .withBackground(IDB_LFO_MSEG_EDIT)
+        .withProperty(Component::ACCESSIBLE_AS_MOMENTARY_BUTTON, true);
 
 Connector lfo_eg_panel = Connector("lfo.envelope.panel", 616, 493, Components::Group);
 Connector delay = Connector("lfo.delay", 0, 0).inParent("lfo.envelope.panel");
@@ -534,7 +555,8 @@ namespace OtherControls
 Connector surge_menu = Connector("controls.surge_menu", 848, 550, 50, 15, Components::MultiSwitch,
                                  Connector::SURGE_MENU)
                            .withProperty(Component::BACKGROUND, IDB_MAIN_MENU)
-                           .withProperty(Component::DRAGGABLE_HSWITCH, false);
+                           .withProperty(Component::MOUSEWHEELABLE_SWITCH, false)
+                           .withProperty(Component::DRAGGABLE_SWITCH, false);
 
 Connector patch_browser = Connector("controls.patch_browser", 157, 12, 390, 28, Components::Custom,
                                     Connector::PATCH_BROWSER);
@@ -542,10 +564,22 @@ Connector patch_category_jog =
     Connector("controls.category.prevnext", 157, 42, Connector::JOG_PATCHCATEGORY).asJogPlusMinus();
 Connector patch_jog =
     Connector("controls.patch.prevnext", 246, 42, Connector::JOG_PATCH).asJogPlusMinus();
+
+Connector action_undo =
+    Connector("controls.action.undo", 433, 42, 16, 12, Components::Switch, Connector::ACTION_UNDO)
+        .withBackground(IDB_UNDO_BUTTON)
+        .withProperty(Component::ACCESSIBLE_AS_MOMENTARY_BUTTON, true);
+Connector action_redo =
+    Connector("controls.action.redo", 448, 42, 16, 12, Components::Switch, Connector::ACTION_REDO)
+        .withBackground(IDB_REDO_BUTTON)
+        .withProperty(Component::ACCESSIBLE_AS_MOMENTARY_BUTTON, true);
+
 Connector patch_save = Connector("controls.patch.save", 510, 42, 37, 12, Components::MultiSwitch,
                                  Connector::SAVE_PATCH)
                            .withHSwitch2Properties(IDB_SAVE_PATCH, 1, 1, 1)
-                           .withProperty(Component::DRAGGABLE_HSWITCH, false);
+                           .withProperty(Component::MOUSEWHEELABLE_SWITCH, false)
+                           .withProperty(Component::DRAGGABLE_SWITCH, false)
+                           .withProperty(Component::ACCESSIBLE_AS_MOMENTARY_BUTTON, true);
 
 Connector status_panel = Connector("controls.status.panel", 562, 12, Components::Group);
 Connector status_mpe =
@@ -570,13 +604,25 @@ Connector mseg_editor = Connector("msegeditor.window", 0, 58, 750, 365, Componen
 Connector formula_editor = Connector("formulaeditor.window", 0, 58, 750, 365, Components::Custom,
                                      Connector::FORMULA_EDITOR_WINDOW);
 
+Connector wt_editor = Connector("wteditor.window", 148, 57, 765, 512, Components::Custom,
+                                Connector::WT_EDITOR_WINDOW);
+
 Connector tuning_editor = Connector("tuningeditor.window", 0, 58, 750, 511, Components::Custom,
                                     Connector::TUNING_EDITOR_WINDOW);
 
 Connector mod_list =
     Connector("modlist.window", 148, 58, 602, 511, Components::Custom, Connector::MOD_LIST_WINDOW);
 
-Connector save_patch_dialog = Connector("controls.patch.save.window", 157, 57, 390, 270,
+Connector filter_analysis = Connector("filter.filter_analysis.window", 300, 263, 450, 212,
+                                      Components::Custom, Connector::FILTER_ANALYSIS_WINDOW);
+
+Connector oscilloscope = Connector("oscilloscope.window", 0, 58, 750, 365, Components::Custom,
+                                   Connector::OSCILLOSCOPE_WINDOW);
+
+Connector ws_analysis = Connector("filter.waveshaper_analysis.window", 450, 237, 300, 160,
+                                  Components::Custom, Connector::WAVESHAPER_ANALYSIS_WINDOW);
+
+Connector save_patch_dialog = Connector("controls.patch.save.window", 157, 57, 390, 300,
                                         Components::Custom, Connector::SAVE_PATCH_DIALOG);
 
 // modulation panel is special, so it shows up as 'CUSTOM' with no connector and is special-cased in

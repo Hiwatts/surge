@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "WaveShaperAnalysis.h"
 #include "RuntimeFont.h"
@@ -21,40 +28,34 @@ namespace Surge
 {
 namespace Overlays
 {
-WaveShaperAnalysis::WaveShaperAnalysis(SurgeStorage *s)
+WaveShaperAnalysis::WaveShaperAnalysis(SurgeGUIEditor *e, SurgeStorage *s) : editor(e), storage(s)
 {
-    tryitSlider = std::make_unique<Surge::Widgets::ModulatableSlider>();
-    tryitSlider->setOrientation(Surge::ParamConfig::kVertical);
-    tryitSlider->setValue(0.5);
-    tryitSlider->setQuantitizedDisplayValue(0.5);
-    tryitSlider->setBipolarFn([]() { return true; });
-    tryitSlider->setIsLightStyle(true);
-    tryitSlider->setStorage(s);
-    tryitSlider->addListener(this);
-    addAndMakeVisible(*tryitSlider);
 }
 
-void WaveShaperAnalysis::onSkinChanged() { tryitSlider->setSkin(skin, associatedBitmapStore); }
-void WaveShaperAnalysis::resized() { tryitSlider->setBounds(8, 25, 22, 84); }
+void WaveShaperAnalysis::onSkinChanged() {}
+void WaveShaperAnalysis::resized() {}
 
 void WaveShaperAnalysis::paint(juce::Graphics &g)
 {
-    if (sliderDrivenCurve.empty())
+    auto lb = getLocalBounds().transformedBy(getTransform().inverted());
+    auto width = lb.getWidth();
+    auto height = lb.getHeight();
+
+    if (sliderDrivenCurve.empty() || lastDbValue != getDbValue() || lastPFG != getPFG())
     {
         recalcFromSlider();
     }
 
     g.fillAll(skin->getColor(Colors::Waveshaper::Preview::Background));
 
-    // OK so this path is in x=0,1 y=-1,1
-    const auto sideOne = 45.f, sideTwo = 2.f, top = 25.f;
+    // OK so this path is in x = 0, 1; y = -1, 1
+    const auto sideOne = 4.f, sideTwo = 4.f, top = 25.f;
     auto xf = juce::AffineTransform()
                   .translated(0, -1.0)
                   .scaled(1, -0.5)
-                  .scaled(getWidth(), getHeight())
+                  .scaled(width, height)
                   .translated(sideOne, 2 + top)
-                  .scaled((getWidth() - sideOne - sideTwo) / getWidth(),
-                          (getHeight() - 4.0 - top) / getHeight());
+                  .scaled((width - sideOne - sideTwo) / width, (height - 4.0 - top) / height);
 
     auto re = juce::Rectangle<float>{0, -1, 1, 2}.transformedBy(xf);
 
@@ -64,127 +65,132 @@ void WaveShaperAnalysis::paint(juce::Graphics &g)
     {
         if (i == 0)
         {
-            p.startNewSubPath(sliderDrivenCurve[i].first, sliderDrivenCurve[i].second);
-            pInput.startNewSubPath(sliderDrivenCurve[i].first,
-                                   std::sin(sliderDrivenCurve[i].first * 4.0 * M_PI));
+            p.startNewSubPath(std::get<0>(sliderDrivenCurve[i]), std::get<2>(sliderDrivenCurve[i]));
+            pInput.startNewSubPath(std::get<0>(sliderDrivenCurve[i]),
+                                   std::get<1>(sliderDrivenCurve[i]));
         }
         else
         {
-            p.lineTo(sliderDrivenCurve[i].first, sliderDrivenCurve[i].second);
-            pInput.lineTo(sliderDrivenCurve[i].first,
-                          std::sin(sliderDrivenCurve[i].first * 4.0 * M_PI));
+            p.lineTo(std::get<0>(sliderDrivenCurve[i]), std::get<2>(sliderDrivenCurve[i]));
+            pInput.lineTo(std::get<0>(sliderDrivenCurve[i]), std::get<1>(sliderDrivenCurve[i]));
         }
     }
 
     re.expand(2, 2);
 
     {
-        juce::Graphics::ScopedSaveState gs(g);
-        g.setColour(skin->getColor(Colors::Waveshaper::Display::Wave));
-        g.setColour(skin->getColor(Colors::Waveshaper::Display::Dots));
+        auto gs = juce::Graphics::ScopedSaveState(g);
 
-        for (int yd = -4; yd <= 4; ++yd)
+        auto font = skin->fontManager->getLatoAtSize(7);
+        g.setFont(font);
+
+        for (float dphase : {0.25f, 0.5f, 0.75f})
         {
-            float yp = yd * 0.2;
-            for (float xp = 0.05; xp < 1; xp += 0.05)
-            {
-                auto cxp = xp, cyp = yp;
+            auto x0 = dphase, y0 = -1.f, x1 = dphase, y1 = 1.f;
+            xf.transformPoint(x0, y0);
+            xf.transformPoint(x1, y1);
+            juce::Line line{juce::Point{x0, y0}, juce::Point{x1, y1}};
 
-                xf.transformPoint(cxp, cyp);
-                g.fillEllipse(cxp - 0.5, cyp - 0.5, 1, 1);
+            g.setColour(skin->getColor(Colors::MSEGEditor::Grid::SecondaryVertical));
+            g.drawLine(line);
+        }
+
+        for (float amp : {-0.5f, 0.f, 0.5f})
+        {
+            auto x0 = 0.f, y0 = amp, x1 = 1.f, y1 = amp;
+            xf.transformPoint(x0, y0);
+            xf.transformPoint(x1, y1);
+            juce::Line line{juce::Point{x0, y0}, juce::Point{x1, y1}};
+
+            g.setColour(skin->getColor(Colors::MSEGEditor::Grid::SecondaryHorizontal));
+            g.drawLine(line);
+        }
+    }
+
+    {
+        juce::Graphics::ScopedSaveState gs(g);
+
+        g.setColour(skin->getColor(Colors::MSEGEditor::Grid::Primary));
+        g.drawLine(re.getX(), re.getCentreY(), re.getX() + re.getWidth(), re.getCentreY());
+
+        {
+            auto gs2 = juce::Graphics::ScopedSaveState(g);
+
+            g.reduceClipRegion(re.toNearestIntEdges());
+            g.strokePath(pInput, juce::PathStrokeType(0.75), xf);
+
+            if (wstype != sst::waveshapers::WaveshaperType::wst_none)
+            {
+                {
+                    auto gs = juce::Graphics::ScopedSaveState(g);
+                    auto fp = p;
+
+                    fp.lineTo(std::get<0>(sliderDrivenCurve.back()), 0);
+                    fp.lineTo(0, 0);
+
+                    auto cg = juce::ColourGradient::vertical(
+                        skin->getColor(Colors::MSEGEditor::GradientFill::StartColor),
+                        skin->getColor(Colors::MSEGEditor::GradientFill::EndColor), re);
+
+                    g.setGradientFill(cg);
+                    g.fillPath(fp, xf);
+                }
+
+                {
+                    auto gs = juce::Graphics::ScopedSaveState(g);
+
+                    g.setColour(skin->getColor(Colors::MSEGEditor::Curve));
+                    g.strokePath(
+                        p, juce::PathStrokeType(1.f, juce::PathStrokeType::JointStyle::curved), xf);
+                }
             }
         }
-
-        g.drawLine(re.getX(), re.getCentreY(), re.getX() + re.getWidth(), re.getCentreY());
-        g.setColour(skin->getColor(Colors::Waveshaper::Display::WaveHover));
-        g.strokePath(pInput, juce::PathStrokeType(1.0), xf);
-
-        if (wstype != wst_none)
-        {
-            g.setColour(skin->getColor(Colors::Waveshaper::Display::Wave));
-            g.strokePath(p, juce::PathStrokeType(1.25), xf);
-        }
     }
 
-    g.setColour(skin->getColor(Colors::Waveshaper::Preview::Border));
+    g.setColour(skin->getColor(Colors::MSEGEditor::Grid::Primary));
     g.drawRect(re);
 
-    {
-        auto ypos = tryitSlider->getBounds().getBottom() + 2.f;
-        auto tx = juce::Rectangle<float>{0, ypos, 40 - 4, 12.f};
-
-        std::ostringstream oss;
-        oss << std::fixed << std::setprecision(2) << sliderDb;
-
-        g.setFont(skin->getFont(Fonts::WaveshaperAnalysis::DriveAmount));
-        g.setColour(skin->getColor(Colors::Waveshaper::Preview::Text));
-        g.drawText(oss.str(), tx, juce::Justification::centred);
-
-        tx = tx.translated(0, 12);
-
-        g.setFont(skin->getFont(Fonts::WaveshaperAnalysis::DriveLabel));
-        g.setColour(skin->getColor(Colors::Waveshaper::Preview::Text));
-        g.drawText("Drive (dB)", tx, juce::Justification::centred);
-    }
-
-    auto txtr = getLocalBounds().withHeight(top - 6);
+    auto txtr = lb.withHeight(top - 6);
     std::ostringstream title;
-    title << "Current: " << wst_names[wstype];
+    title << sst::waveshapers::wst_names[(int)wstype];
 
     g.setColour(skin->getColor(Colors::Waveshaper::Preview::Text));
-    g.setFont(skin->getFont(Fonts::WaveshaperAnalysis::Title));
+    g.setFont(skin->getFont(Fonts::Waveshaper::Preview::Title));
     g.drawText(title.str(), txtr, juce::Justification::centred);
-}
-
-void WaveShaperAnalysis::valueChanged(Surge::GUI::IComponentTagValue *p)
-{
-    recalcFromSlider();
-    tryitSlider->setQuantitizedDisplayValue(tryitSlider->getValue());
-    repaint();
-}
-
-int32_t WaveShaperAnalysis::controlModifierClicked(Surge::GUI::IComponentTagValue *p,
-                                                   const juce::ModifierKeys &mods,
-                                                   bool isDoubleClickEvent)
-{
-    if (isDoubleClickEvent)
-    {
-        tryitSlider->setValue(0.5f);
-        valueChanged(tryitSlider.get());
-    }
-
-    return 0;
 }
 
 void WaveShaperAnalysis::recalcFromSlider()
 {
+    lastDbValue = getDbValue();
+    lastPFG = getPFG();
     sliderDrivenCurve.clear();
 
-    QuadFilterWaveshaperState wss;
+    sst::waveshapers::QuadWaveshaperState wss;
     float dx = 1.f / (npts - 1);
     float R[4];
 
     initializeWaveshaperRegister(wstype, R);
 
-    for (int i = 0; i < n_waveshaper_registers; ++i)
+    for (int i = 0; i < sst::waveshapers::n_waveshaper_registers; ++i)
     {
-        wss.R[i] = _mm_set1_ps(R[i]);
+        wss.R[i] = SIMD_MM(set1_ps)(R[i]);
     }
 
-    wss.init = _mm_cmpeq_ps(_mm_setzero_ps(), _mm_setzero_ps()); // better way?
+    wss.init = SIMD_MM(cmpeq_ps)(SIMD_MM(setzero_ps)(), SIMD_MM(setzero_ps)()); // better way?
 
-    auto wsop = GetQFPtrWaveshaper(wstype);
+    auto wsop = sst::waveshapers::GetQuadWaveshaper(wstype);
 
-    sliderDb = tryitSlider->getValue() * 96 - 48;
-
+    auto sliderDb = getDbValue();
     auto amp = powf(2.f, sliderDb / 18.f);
-    auto d1 = _mm_set1_ps(amp);
+
+    auto pfg = powf(2.f, getPFG() / 18.f);
+    auto d1 = SIMD_MM(set1_ps)(amp);
 
     for (int i = 0; i < npts; i++)
     {
         float x = i * dx;
-        float inval = std::sin(x * 4.0 * M_PI);
-        auto ivs = _mm_set1_ps(inval);
+        float inval = pfg * std::sin(x * 4.0 * M_PI);
+        auto ivs = SIMD_MM(set1_ps)(inval);
         auto ov1 = ivs;
 
         if (wsop)
@@ -193,16 +199,51 @@ void WaveShaperAnalysis::recalcFromSlider()
         }
 
         float r alignas(16)[8];
-        _mm_store_ps(r, ov1);
+        SIMD_MM(store_ps)(r, ov1);
 
-        sliderDrivenCurve.emplace_back(x, r[0]);
+        sliderDrivenCurve.emplace_back(x, inval, r[0]);
     }
 }
 
 void WaveShaperAnalysis::setWSType(int w)
 {
-    wstype = w;
+    wstype = static_cast<sst::waveshapers::WaveshaperType>(w);
     recalcFromSlider();
+}
+
+float WaveShaperAnalysis::getDbValue()
+{
+    float sliderDb = 0.f;
+    auto cs = editor->current_scene;
+    auto &p = editor->getPatch().scene[cs].wsunit.drive;
+    auto f = p.get_extended(p.val.f);
+    sliderDb = f;
+    return sliderDb;
+}
+
+float WaveShaperAnalysis::getPFG()
+{
+    float sliderDb = 0.f;
+    auto cs = editor->current_scene;
+    auto &p = editor->getPatch().scene[cs].level_pfg;
+    auto f = p.get_extended(p.val.f);
+    sliderDb = f;
+    return sliderDb;
+}
+bool WaveShaperAnalysis::shouldRepaintOnParamChange(const SurgePatch &patch, Parameter *p)
+{
+    if (p->ctrlgroup == cg_GLOBAL || p->ctrlgroup == cg_MIX)
+    {
+        for (int i = 0; i < n_scenes; ++i)
+        {
+            auto &ws = patch.scene[i].wsunit;
+            if (p->id == ws.type.id || p->id == ws.drive.id)
+                return true;
+            if (p->id == patch.scene[i].level_pfg.id)
+                return true;
+        }
+    }
+    return false;
 }
 
 } // namespace Overlays

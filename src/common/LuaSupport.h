@@ -1,30 +1,38 @@
 /*
- ** Surge Synthesizer is Free and Open Source Software
- **
- ** Surge is made available under the Gnu General Public License, v3.0
- ** https://www.gnu.org/licenses/gpl-3.0.en.html
- **
- ** Copyright 2004-2021 by various individuals as described by the Git transaction log
- **
- ** All source at: https://github.com/surge-synthesizer/surge.git
- **
- ** Surge was a commercial product from 2004-2018, with Copyright and ownership
- ** in that period held by Claes Johanson at Vember Audio. Claes made Surge
- ** open source in September 2018.
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
  */
 
 /*
  * This header provides a set of LUA support functions which are used
- * in the various places we deply lua (formula modulator, waveform
+ * in the various places we deploy lua (formula modulator, waveform
  * generator, int he future mod mappers etc...)
  */
 
-#ifndef SURGE_XT_LUASUPPORT_H
-#define SURGE_XT_LUASUPPORT_H
+#ifndef SURGE_SRC_COMMON_LUASUPPORT_H
+#define SURGE_SRC_COMMON_LUASUPPORT_H
 
 #include <string>
 #include <vector>
 
+#if HAS_LUA
 extern "C"
 {
 #include "lua.h"
@@ -34,6 +42,9 @@ extern "C"
 
 #include "lj_arch.h"
 }
+#else
+typedef int lua_State;
+#endif
 
 namespace Surge
 {
@@ -74,15 +85,20 @@ int parseStringDefiningMultipleFunctions(lua_State *s, const std::string &defini
 bool setSurgeFunctionEnvironment(lua_State *s);
 
 /*
- * Call this function with a LUA state and it will introduce the global
- * 'surge' which is the surge prelude
+ * Call this function with a LUA state, the std::string at Surge::LuaSources and it will load the
+ * prelude in the table "surge"
  */
-bool loadSurgePrelude(lua_State *s);
+bool loadSurgePrelude(lua_State *s, const std::string &lua_script);
 
 /*
- * Call this function to get a string representation of the prelude
+ * Call this function to get a string representation of the Formula prelude
  */
-std::string getSurgePrelude();
+std::string getFormulaPrelude();
+
+/*
+ * Call this function to get a string representation of the WTSE prelude
+ */
+std::string getWTSEPrelude();
 
 /*
  * A little leak debugger. Make this on your stack and if you exit the
@@ -93,10 +109,12 @@ struct SGLD
 {
     SGLD(const std::string &lab, lua_State *L) : label(lab), L(L)
     {
+#if HAS_LUA
         if (L)
         {
             top = lua_gettop(L);
         }
+#endif
     }
     ~SGLD();
 
@@ -104,6 +122,13 @@ struct SGLD
     lua_State *L;
     int top;
 };
+
+/*
+ * Global table names
+ */
+static constexpr const char *surgeTableName{"surge"};
+static constexpr const char *sharedTableName{"shared"};
+
 } // namespace LuaSupport
 } // namespace Surge
 

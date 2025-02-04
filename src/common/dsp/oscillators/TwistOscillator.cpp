@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "TwistOscillator.h"
 #include "DebugHelpers.h"
@@ -24,12 +31,6 @@
 #endif
 #endif
 #include "plaits/dsp/voice.h"
-
-#include "samplerate.h"
-
-#if SAMPLERATE_LANCZOS
-#include "LanczosResampler.h"
-#endif
 
 std::string twist_engine_name(int i)
 {
@@ -176,7 +177,7 @@ static struct EngineDynamicBipolar : public ParameterDynamicBoolFunction
         engineBipolars.push_back({true, false, false, true});  // Analog Hi-Hat
     }
 
-    const bool getValue(const Parameter *p) const override
+    bool getValue(const Parameter *p) const override
     {
         auto oscs = &(p->storage->getPatch().scene[p->scene - 1].osc[p->ctrlgroup_entry]);
 
@@ -196,7 +197,10 @@ static struct EngineDynamicBipolar : public ParameterDynamicBoolFunction
             return false;
         }
         auto idx = (p - engp);
-
+        if (idx < 0 || idx >= engineBipolars[eng].size())
+        {
+            return false;
+        }
         bool res = engineBipolars[eng][idx - 1];
         if (idx == TwistOscillator::twist_aux_mix)
             res = p->extend_range;
@@ -259,7 +263,7 @@ static struct EngineDynamicDeact : public ParameterDynamicDeactivationFunction
 {
     EngineDynamicDeact() noexcept {}
 
-    const bool getValue(const Parameter *p) const override
+    bool getValue(const Parameter *p) const override
     {
         auto oscs = &(p->storage->getPatch().scene[p->scene - 1].osc[p->ctrlgroup_entry]);
         return oscs->p[TwistOscillator::twist_lpg_response].deactivated;
@@ -274,53 +278,41 @@ static struct EngineDynamicDeact : public ParameterDynamicDeactivationFunction
 
 TwistOscillator::TwistOscillator(SurgeStorage *storage, OscillatorStorage *oscdata,
                                  pdata *localcopy)
-    : Oscillator(storage, oscdata, localcopy)
+    : Oscillator(storage, oscdata, localcopy), charFilt(storage)
 {
-#if SAMPLERATE_LANCZOS
-    lancRes = std::make_unique<LanczosResampler>(48000, dsamplerate_os);
-    srcstate = nullptr;
-#else
-    int error;
-    srcstate = src_new(SRC_SINC_FASTEST, 2, &error);
-    // srcstate = src_new(SRC_LINEAR, 2, &error);
-    if (error != 0)
-    {
-        srcstate = nullptr;
-    }
-#endif
+    lancRes = std::make_unique<resamp_t>(48000, storage->dsamplerate_os);
     voice = std::make_unique<plaits::Voice>();
     shared_buffer = new char[16384];
     alloc = std::make_unique<stmlib::BufferAllocator>(shared_buffer, 16384);
-    voice->Init(alloc.get());
     patch = std::make_unique<plaits::Patch>();
     mod = std::make_unique<plaits::Modulations>();
 
     // FM downsampling with a linear interpolator is absolutely fine
-    int error;
-    fmdownsamplestate = src_new(SRC_LINEAR, 1, &error);
-    if (error != 0)
-    {
-        fmdownsamplestate = nullptr;
-    }
+    fmDownSampler = std::make_unique<resamp_t>(storage->dsamplerate_os, 48000);
 }
 
 float TwistOscillator::tuningAwarePitch(float pitch)
 {
+    float p = pitch;
+
     if (storage->tuningApplicationMode == SurgeStorage::RETUNE_ALL &&
-        !(storage->oddsound_mts_client && storage->oddsound_mts_active) &&
+        !(storage->oddsound_mts_client && storage->oddsound_mts_active_as_client) &&
         !(storage->isStandardTuning))
     {
         auto idx = (int)floor(pitch);
         float frac = pitch - idx; // frac is 0 means use idx; frac is 1 means use idx+1
         float b0 = storage->currentTuning.logScaledFrequencyForMidiNote(idx) * 12;
         float b1 = storage->currentTuning.logScaledFrequencyForMidiNote(idx + 1) * 12;
-        return (1.f - frac) * b0 + frac * b1;
+        p = (1.f - frac) * b0 + frac * b1;
     }
-    return pitch;
+
+    return std::max(p, -24.f);
 }
 
 void TwistOscillator::init(float pitch, bool is_display, bool nonzero_drift)
 {
+    voice->Init(alloc.get());
+
     charFilt.init(storage->getPatch().character.val.i);
 
     float tpitch = tuningAwarePitch(pitch);
@@ -343,7 +335,7 @@ void TwistOscillator::init(float pitch, bool is_display, bool nonzero_drift)
 
     memset(fmlagbuffer, 0, (BLOCK_SIZE_OS << 1) * sizeof(float));
     fmrp = 0;
-    fmwp = (int)(BLOCK_SIZE_OS * 48000 * dsamplerate_os_inv);
+    fmwp = (int)(BLOCK_SIZE_OS * 48000 * storage->dsamplerate_os_inv);
 
     process_block_internal<false, true>(pitch, 0, false, 0, std::ceil(cycleInSamples));
 }
@@ -351,24 +343,13 @@ TwistOscillator::~TwistOscillator()
 {
     if (shared_buffer)
         delete[] shared_buffer;
-
-    if (srcstate)
-        srcstate = src_delete(srcstate);
-
-    if (fmdownsamplestate)
-        fmdownsamplestate = src_delete(fmdownsamplestate);
 }
 
 template <bool FM, bool throwaway>
 void TwistOscillator::process_block_internal(float pitch, float drift, bool stereo, float FMdepth,
                                              int throwawayBlocks)
 {
-#if SAMPLERATE_SRC
-    if (!srcstate)
-        return;
-#endif
-
-    if (FM && !fmdownsamplestate)
+    if (FM && !fmDownSampler)
         return;
 
     pitch = tuningAwarePitch(pitch);
@@ -377,39 +358,34 @@ void TwistOscillator::process_block_internal(float pitch, float drift, bool ster
     patch->note = pitch + drift * driftv;
     patch->engine = oscdata->p[twist_engine].val.i;
 
-    harm.newValue(fvbp(twist_harmonics));
-    timb.newValue(fvbp(twist_timbre));
-    morph.newValue(fvbp(twist_morph));
-    lpgcol.newValue(fv(twist_lpg_response));
-    lpgdec.newValue(fv(twist_lpg_decay));
+    harm.newValue(limit_range(fvbp(twist_harmonics), -1.f, 1.f));
+    timb.newValue(limit_range(fvbp(twist_timbre), -1.f, 1.f));
+    morph.newValue(limit_range(fvbp(twist_morph), -1.f, 1.f));
+    lpgcol.newValue(limit_range(fv(twist_lpg_response), 0.f, 1.f));
+    lpgdec.newValue(limit_range(fv(twist_lpg_decay), 0.f, 1.f));
     auxmix.newValue(limit_range(fvbp(twist_aux_mix), -1.f, 1.f));
 
     bool lpgIsOn = !oscdata->p[twist_lpg_response].deactivated;
 
-    constexpr int max_subblock = 4;
-    int subblock = (lpgIsOn || FM) ? 1 : max_subblock;
-#if SAMPLERATE_SRC
-    float src_in[subblock][2];
-    float src_out[BLOCK_SIZE_OS][2];
+    // The LPG in surge 1.1 is wrong because it doesn't use the correct vlock
+    // size. This code allows you to optionally correct that while retaining legacy.
+    // See #6760 for more.
+    constexpr int max_subblock = 12; // This is the internal block size PLAITS uses
 
-    SRC_DATA sdata;
-    sdata.end_of_input = 0;
-    sdata.src_ratio = dsamplerate_os / 48000.0;
-#endif
+    // This setting is *incorrect* but retains legacy surge XT 1.1 behavior
+    int subblock = (lpgIsOn || FM) ? 1 : 4; // retain surge legacy
+
+    // This setting allows us to correct it in VCV Rack.
+    if (lpgIsOn && useCorrectLPGBlockSize)
+        subblock = 12;
 
     float normFMdepth = 0;
 
     if (FM)
     {
-        float dsmaster[BLOCK_SIZE_OS << 2];
-        SRC_DATA fmdata;
-        fmdata.end_of_input = 0;
-        fmdata.src_ratio = 48000.0 / dsamplerate_os; // going INTO the plaits rate
-        fmdata.data_in = master_osc;
-        fmdata.data_out = &(dsmaster[0]);
-        fmdata.input_frames = BLOCK_SIZE_OS;
-        fmdata.output_frames = BLOCK_SIZE_OS << 2;
-        src_process(fmdownsamplestate, &fmdata);
+        float dsmaster[2][BLOCK_SIZE_OS << 2];
+        for (int i = 0; i < BLOCK_SIZE_OS; ++i)
+            fmDownSampler->push(master_osc[i], 0.f);
 
         const float bl = -143.5, bhi = 71.7, oos = 1.0 / (bhi - bl);
         float adb = limit_range(amp_to_db(FMdepth), bl, bhi);
@@ -417,35 +393,19 @@ void TwistOscillator::process_block_internal(float pitch, float drift, bool ster
 
         normFMdepth = limit_range(nfm, 0.f, 1.f);
 
-        for (int i = 0; i < fmdata.output_frames_gen; ++i)
+        auto outputFramesGen =
+            fmDownSampler->populateNext(dsmaster[0], dsmaster[1], BLOCK_SIZE_OS << 2);
+        for (int i = 0; i < outputFramesGen; ++i)
         {
-            fmlagbuffer[fmwp] = dsmaster[i];
+            fmlagbuffer[fmwp] = dsmaster[0][i];
             fmwp = (fmwp + 1) & ((BLOCK_SIZE_OS << 1) - 1);
         }
     }
 
     int required_blocks = throwaway ? throwawayBlocks : BLOCK_SIZE_OS;
 
-#if SAMPLERATE_SRC
-    for (int i = 0; i < carrover_size; ++i)
-    {
-        if (oscdata->p[twist_aux_mix].extend_range)
-        {
-            output[i] = auxmix.v * carryover[i][1] + (1.0 - auxmix.v) * carryover[i][0];
-            outputR[i] = auxmix.v * carryover[i][0] + (1.0 - auxmix.v) * carryover[i][1];
-        }
-        else
-        {
-            output[i] = auxmix.v * carryover[i][1] + (1.0 - auxmix.v) * carryover[i][0];
-            outputR[i] = output[i];
-        }
-    }
-    int total_generated = carrover_size;
-    carrover_size = 0;
-#else
     int total_generated =
         required_blocks - lancRes->inputsRequiredToGenerateOutputs(required_blocks);
-#endif
 
     if (lpgIsOn)
     {
@@ -467,9 +427,6 @@ void TwistOscillator::process_block_internal(float pitch, float drift, bool ster
         morph.process();
         lpgdec.process();
         lpgcol.process();
-#if SAMPLERATE_SRC
-        auxmix.process();
-#endif
 
         if (FM)
         {
@@ -486,61 +443,14 @@ void TwistOscillator::process_block_internal(float pitch, float drift, bool ster
 
         voice->Render(*patch, *mod, poutput, subblock);
 
-#if SAMPLERATE_LANCZOS
         for (int i = 0; i < subblock; ++i)
         {
             lancRes->push(poutput[i].out / 32768.f, poutput[i].aux / 32768.f);
         }
         total_generated =
             required_blocks - lancRes->inputsRequiredToGenerateOutputs(required_blocks);
-#else
-        for (int i = 0; i < subblock; ++i)
-        {
-            src_in[i][0] = poutput[i].out / 32768.f;
-            src_in[i][1] = poutput[i].aux / 32768.f;
-        }
-        sdata.data_in = &(src_in[0][0]);
-        sdata.data_out = &(src_out[0][0]);
-        sdata.input_frames = subblock;
-        sdata.output_frames = BLOCK_SIZE_OS;
-        auto res = src_process(srcstate, &sdata);
-        // FIXME - check res
-
-        for (int i = 0; i < sdata.output_frames_gen; ++i)
-        {
-            if (i + total_generated >= required_blocks)
-            {
-                carryover[carrover_size][0] = src_out[i][0];
-                carryover[carrover_size][1] = src_out[i][1];
-                carrover_size++;
-            }
-            else if (!throwaway)
-            {
-                if (oscdata->p[twist_aux_mix].extend_range)
-                {
-                    output[total_generated + i] =
-                        auxmix.v * src_out[i][1] + (1 - auxmix.v) * src_out[i][0];
-                    outputR[total_generated + i] =
-                        auxmix.v * src_out[i][0] + (1 - auxmix.v) * src_out[i][1];
-                }
-                else
-                {
-                    output[total_generated + i] =
-                        auxmix.v * src_out[i][1] + (1 - auxmix.v) * src_out[i][0];
-                    outputR[total_generated + i] = output[total_generated + i];
-                }
-            }
-        }
-        total_generated += sdata.output_frames_gen;
-        if (sdata.input_frames_used != subblock)
-        {
-            // FIXME
-            std::cout << "DEAL " << std::endl;
-        }
-#endif
     }
 
-#if SAMPLERATE_LANCZOS
     if (throwaway)
     {
         lancRes->advanceReadPointer(required_blocks);
@@ -566,7 +476,6 @@ void TwistOscillator::process_block_internal(float pitch, float drift, bool ster
         }
     }
     lancRes->renormalizePhases();
-#endif
 
     if (!throwaway && charFilt.doFilter)
     {

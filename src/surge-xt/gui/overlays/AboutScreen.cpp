@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "AboutScreen.h"
 #include "SurgeGUIEditor.h"
@@ -114,8 +121,8 @@ struct ClipboardCopyButton : public juce::TextButton, Surge::GUI::SkinConsumingC
     {
         setAccessible(true);
         setWantsKeyboardFocus(true);
-        setDescription("Copy Version Info");
-        setTitle("Copy Version Info");
+        setDescription("Copy Info to Clipboard");
+        setTitle("Copy Info to Clipboard");
     }
 
     void paintButton(juce::Graphics &g, bool shouldDrawButtonAsHighlighted,
@@ -132,8 +139,9 @@ struct ClipboardCopyButton : public juce::TextButton, Surge::GUI::SkinConsumingC
             g.setColour(skin->getColor(Colors::AboutPage::Link));
         }
 
-        g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(10));
-        g.drawText("Copy Version Info", getLocalBounds(), juce::Justification::centred, false);
+        g.setFont(skin->fontManager->getLatoAtSize(10));
+        g.drawText("Copy Info to Clipboard", getLocalBounds(), juce::Justification::centredLeft,
+                   false);
     }
 };
 
@@ -164,26 +172,38 @@ void AboutScreen::populateData()
     std::string platform = "macOS";
 #elif WINDOWS
     std::string platform = "Windows";
+#if defined(_M_ARM64EC)
+    platform += " (arm64ec)";
+#elif defined(_M_ARM64)
+    platform += " (arm64)";
+#endif
 #elif LINUX
     std::string platform = "Linux";
 #else
     std::string platform = "GLaDOS, Orac or Skynet";
 #endif
 
-    std::string bitness = (sizeof(size_t) == 4 ? std::string("32") : std::string("64")) + "-bit";
-    std::string system =
-        platform + " " + bitness + " " + wrapper + " on " + sst::plugininfra::cpufeatures::brand();
+    const auto ramsize = juce::SystemStats::getMemorySizeInMegabytes();
+    const auto ramString =
+        fmt::format("{:.0f} {} RAM", ramsize >= 1024 ? std::roundf(ramsize / 1024.f) : ramsize,
+                    ramsize >= 1024 ? "GB" : "MB");
+
+    const auto bitness = (sizeof(size_t) == 4 ? std::string("32") : std::string("64")) + "-bit";
+    const auto system = fmt::format("{} {}{} on {}, {}", platform, bitness,
+                                    wrapper == "Undefined" ? "" : " " + wrapper,
+                                    sst::plugininfra::cpufeatures::brand(), ramString);
 
     lowerLeft.clear();
     lowerLeft.emplace_back("Version:", version, "");
-    lowerLeft.emplace_back("Build:", buildinfo, "");
-    lowerLeft.emplace_back("System:", system, "");
+    lowerLeft.emplace_back("Build Info:", buildinfo, "");
+    lowerLeft.emplace_back("System Info:", system, "");
 
-    auto srString = fmt::format("{:.1f} kHz", samplerate / 1000.0);
+    const auto srString = fmt::format("{} Hz", (int)storage->samplerate);
 
     if (host != "Unknown")
     {
         auto hstr = host + " @ " + srString;
+
         lowerLeft.emplace_back("Host:", hstr, "");
     }
     else
@@ -191,9 +211,12 @@ void AboutScreen::populateData()
         lowerLeft.emplace_back("Sample Rate:", srString, "");
     }
 
+    lowerLeft.emplace_back("Processing Block:", fmt::format("{} samples", BLOCK_SIZE), "");
+
     lowerLeft.emplace_back("", "", "");
 
-    auto apppath = sst::plugininfra::paths::sharedLibraryBinaryPath();
+    const auto apppath = sst::plugininfra::paths::sharedLibraryBinaryPath();
+
     lowerLeft.emplace_back("Executable:", apppath.u8string(), apppath.parent_path().u8string());
     lowerLeft.emplace_back("Factory Data:", storage->datapath.u8string(),
                            storage->datapath.u8string());
@@ -201,7 +224,15 @@ void AboutScreen::populateData()
                            storage->userDataPath.u8string());
 
     lowerRight.clear();
-    lowerRight.emplace_back("Current Skin:", skin->displayName, skin->root + skin->name);
+
+    auto skinFullName = skin->displayName;
+
+    if (!skin->category.empty())
+    {
+        skinFullName = skin->category + " - " + skin->displayName;
+    }
+
+    lowerRight.emplace_back("Current Skin:", skinFullName, skin->root + skin->name);
     lowerRight.emplace_back("Skin Author:", skin->author, skin->authorURL);
 }
 
@@ -227,7 +258,7 @@ void AboutScreen::buttonClicked(juce::Button *button)
 
 void AboutScreen::resized()
 {
-    if (labels.empty())
+    if (labels.empty() && devModeGrid == -1)
     {
         int lHeight = 16;
         int margin = 16;
@@ -236,12 +267,12 @@ void AboutScreen::resized()
         auto lrs = lowerRight.size();
         auto h0 = getHeight() - lls * lHeight - margin;
         auto h1 = getHeight() - lrs * lHeight - margin;
-        auto colW = 66;
-        auto font = Surge::GUI::getFontManager()->getLatoAtSize(10);
+        auto colW = 84;
+        auto font = skin->fontManager->getLatoAtSize(10);
 
         copyButton = std::make_unique<ClipboardCopyButton>();
         copyButton->setSkin(skin, associatedBitmapStore);
-        copyButton->setBounds(margin + 4, h0 - lHeight - 4, 80, 16);
+        copyButton->setBounds(margin + 4, h0 - lHeight - 4, 112, 16);
         copyButton->addListener(this);
 
         addAndMakeVisible(*copyButton);
@@ -277,7 +308,7 @@ void AboutScreen::resized()
                 lb->setColour(juce::Label::textColourId, skin->getColor(Colors::AboutPage::Link));
                 lb->setText(std::get<1>(l), juce::NotificationType::dontSendNotification);
 
-                auto strw = font.getStringWidth(std::get<1>(l)) + 8;
+                auto strw = SST_STRING_WIDTH_INT(font, std::get<1>(l)) + 8;
                 lb->setBounds(margin + colW, h0, strw, lHeight);
 
                 addAndMakeVisible(*lb);
@@ -319,7 +350,7 @@ void AboutScreen::resized()
                 lb->setColour(juce::Label::textColourId, skin->getColor(Colors::AboutPage::Link));
                 lb->setText(std::get<1>(l), juce::NotificationType::dontSendNotification);
 
-                auto strw = font.getStringWidth(std::get<1>(l)) + 8;
+                auto strw = SST_STRING_WIDTH_INT(font, std::get<1>(l)) + 8;
                 lb->setBounds(rightSide + colW, h1, strw, lHeight);
 
                 addAndMakeVisible(*lb);
@@ -338,7 +369,7 @@ void AboutScreen::resized()
             lb->setInterceptsMouseClicks(false, true);
             lb->setText(s, juce::NotificationType::dontSendNotification);
             lb->setBounds(xp, yp, w, lHeight);
-            lb->setFont(Surge::GUI::getFontManager()->getLatoAtSize(8));
+            lb->setFont(skin->fontManager->getLatoAtSize(8));
             lb->setColour(juce::Label::textColourId, skin->getColor(Colors::AboutPage::Text));
             addAndMakeVisible(*lb);
             labels.push_back(std::move(lb));
@@ -352,9 +383,13 @@ void AboutScreen::resized()
 
         yp += lblvs;
 
-        addLabel("VST is a trademark of Steinberg Media Technologies GmbH;Audio Units is a "
+        addLabel("VST is a trademark of Steinberg Media Technologies GmbH; Audio Units is a "
                  "trademark of Apple Inc.",
                  600);
+
+        yp += lblvs;
+
+        addLabel("CLAP support is licensed under MIT license", 600);
 
         yp += lblvs;
 
@@ -395,8 +430,23 @@ void AboutScreen::resized()
             "by Émilie Gillet, licensed under MIT license",
             600);
 
+        yp += lblvs;
+
+#if EURORACK_CLOUDS_IS_SUPERPARASITES
+        addLabel("Nimbus includes the the integrated superparasites firmware by Patrick Dowling, "
+                 "including"
+                 " mqtthiqs/Parasites and jkammerl/Beat Repeat modes.",
+                 600);
+
+        yp += lblvs;
+#endif
+
+        addLabel("Oscilloscope code based on s(m)exoscope by Bram @ Smartelectronix, licensed "
+                 "under GNU GPL v3 license",
+                 600);
+
         auto img = associatedBitmapStore->getImage(IDB_ABOUT_LOGOS);
-        auto idxes = {0, 4, 3, 1, 2, 5};
+        auto idxes = {0, 4, 3, 6, 1, 2, 5};
 
         std::vector<std::string> urls = {
             stringRepository,
@@ -404,33 +454,91 @@ void AboutScreen::resized()
             "https://developer.apple.com/documentation/audiounit",
             "https://www.gnu.org/licenses/gpl-3.0-standalone.html",
             "https://discord.gg/aFQDdMV",
-            "https://juce.com"};
+            "https://juce.com",
+            "https://cleveraudio.org"};
 
         std::vector<std::string> urllabels = {
-            "Surge GitHub", "VST3", "Apple Audio Units", "Gnu GPL3", "Join our Discord", "JUCE"};
-        int x = 0;
+            "Surge XT GitHub Repository", "Steinberg VST3", "Apple Audio Units",  "GNU GPL3",
+            "Join our Discord!",          "JUCE Framework", "CLever Audio Plugin"};
+
+        int x = idxes.size();
 
         for (auto idx : idxes)
         {
             auto bt = std::make_unique<ClickURLImage>(img, idx, urls[idx], urllabels[idx]);
 
-            bt->setBounds(rightSide + (x * 42), margin, 36, 36);
+            bt->setBounds(getWidth() - (margin / 2) - (x * 42), margin, 36, 36);
             addAndMakeVisible(*bt);
             icons.push_back(std::move(bt));
 
-            x++;
+            x--;
         }
     }
 }
 
 void AboutScreen::paint(juce::Graphics &g)
 {
-    g.fillAll(fillColour);
-
-    if (logo)
+    if (devModeGrid == -1)
     {
-        auto r = juce::Rectangle<int>(0, 0, logoW, logoH).withCentre(getLocalBounds().getCentre());
-        logo->drawWithin(g, r.toFloat(), juce::RectanglePlacement(), 1.0);
+        g.fillAll(fillColour);
+
+        if (logo)
+        {
+            auto r =
+                juce::Rectangle<int>(0, 0, logoW, logoH).withCentre(getLocalBounds().getCentre());
+            logo->drawWithin(g, r.toFloat(), juce::RectanglePlacement(), 1.0);
+        }
+    }
+    else
+    {
+        auto primaryLineColor = juce::Colour((uint32_t)0xC0FF2020);
+        auto secondaryLineColor = juce::Colour((uint32_t)0xC0C06060);
+
+        g.setFont(skin->fontManager->getLatoAtSize(9));
+        g.setColour(juce::Colours::red);
+        g.drawText("0", juce::Rectangle(2, 2, 20, 40), juce::Justification::topLeft);
+
+        // x axis
+        for (int i = 1; i <= getHeight() / devModeGrid; i++)
+        {
+            int y = i * devModeGrid;
+
+            if (i % 4 == 0)
+            {
+                g.setColour(juce::Colours::red);
+                g.drawText(std::to_string(y), juce::Rectangle(2, y + 2, 20, 40),
+                           juce::Justification::topLeft);
+
+                g.setColour(primaryLineColor);
+            }
+            else
+            {
+                g.setColour(secondaryLineColor);
+            }
+
+            g.drawLine(0, y, getWidth(), y);
+        }
+
+        // y axis
+        for (int i = 1; i <= getWidth() / devModeGrid; i++)
+        {
+            int x = i * devModeGrid;
+
+            if (i % 4 == 0)
+            {
+                g.setColour(juce::Colours::red);
+                g.drawText(std::to_string(x), juce::Rectangle(x + 2, 2, 40, 20),
+                           juce::Justification::topLeft);
+
+                g.setColour(primaryLineColor);
+            }
+            else
+            {
+                g.setColour(secondaryLineColor);
+            }
+
+            g.drawLine(x, 0, x, getHeight());
+        }
     }
 }
 

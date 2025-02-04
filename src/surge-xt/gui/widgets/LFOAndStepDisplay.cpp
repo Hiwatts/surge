@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "LFOAndStepDisplay.h"
 #include "SurgeImageStore.h"
@@ -20,9 +27,11 @@
 #include "SurgeGUIUtils.h"
 #include "SurgeJUCEHelpers.h"
 #include "RuntimeFont.h"
+#include <algorithm>
 #include <chrono>
 #include "widgets/MenuCustomComponents.h"
 #include "AccessibleHelpers.h"
+#include "overlays/TypeinParamEditor.h"
 
 namespace Surge
 {
@@ -47,11 +56,15 @@ struct TimeB
     std::chrono::time_point<std::chrono::high_resolution_clock> start;
 };
 
-LFOAndStepDisplay::LFOAndStepDisplay()
+LFOAndStepDisplay::LFOAndStepDisplay(SurgeGUIEditor *e)
+    : juce::Component(), WidgetBaseMixin<LFOAndStepDisplay>(this), guiEditor(e)
 {
     setTitle("LFO Type And Display");
     setAccessible(true);
     setFocusContainerType(juce::Component::FocusContainerType::focusContainer);
+
+    backingImage = std::make_unique<juce::Image>(juce::Image::PixelFormat::ARGB, 50, 50, true);
+    waveformIsUpdated = true;
 
     typeLayer = std::make_unique<OverlayAsAccessibleContainer>("LFO Type");
     addAndMakeVisible(*typeLayer);
@@ -60,6 +73,10 @@ LFOAndStepDisplay::LFOAndStepDisplay()
         auto q = std::make_unique<OverlayAsAccessibleButtonWithValue<LFOAndStepDisplay>>(
             this, lt_names[i]);
         q->onPress = [this, i](auto *t) { updateShapeTo(i); };
+        q->onReturnKey = [this, i](auto *t) {
+            updateShapeTo(i);
+            return true;
+        };
         q->onGetValue = [this, i](auto *t) { return (i == lfodata->shape.val.i) ? 1 : 0; };
         typeLayer->addAndMakeVisible(*q);
         typeAccOverlays[i] = std::move(q);
@@ -67,194 +84,254 @@ LFOAndStepDisplay::LFOAndStepDisplay()
 
     stepLayer = std::make_unique<OverlayAsAccessibleContainer>("Step Sequencer");
     addChildComponent(*stepLayer);
+
+    auto b0 = std::make_unique<OverlayAsAccessibleButton<LFOAndStepDisplay>>(
+        this, "Rotate Sequence Right", juce::AccessibilityRole::button);
+    b0->onPress = [this](auto *p) { shiftRight(); };
+    b0->onReturnKey = [this](auto *p) {
+        shiftRight();
+        return false;
+    };
+    stepLayer->addChildComponent(*b0);
+    stepJogOverlays[0] = std::move(b0);
+    auto b1 = std::make_unique<OverlayAsAccessibleButton<LFOAndStepDisplay>>(
+        this, "Rotate Sequence Left", juce::AccessibilityRole::button);
+    b1->onPress = [this](auto *p) { shiftLeft(); };
+    b1->onReturnKey = [this](auto *p) {
+        shiftLeft();
+        return false;
+    };
+    stepLayer->addChildComponent(*b1);
+    stepJogOverlays[1] = std::move(b1);
+
     for (int i = 0; i < n_stepseqsteps; ++i)
     {
-        {
-            std::string sn = "Step Value " + std::to_string(i + 1);
-            auto q = std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(this, sn);
-            q->onGetValue = [this, i](auto *T) { return ss->steps[i]; };
-            q->onSetValue = [this, i](auto *T, float f) {
-                ss->steps[i] = f;
-                storage->getPatch().isDirty = true;
-                repaint();
-                return;
-            };
-            q->onJogValue = [this, i](auto *t, int dir, bool isShift, bool isControl) {
-                int step = i;
-                if (step >= 0)
-                {
-                    auto f = ss->steps[step];
-                    auto delt = 0.05;
-                    if (isShift)
-                        delt = 0.01;
-                    if (isControl)
-                        delt = (isUnipolar() ? 1.0 : 0.5) / 12.0;
-                    if (dir < 0)
-                        delt *= -1;
+        std::string sn = "Step Value " + std::to_string(i + 1);
+        auto q = std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(this, sn);
 
-                    if (isUnipolar())
-                        f = limit01(f + delt);
-                    else
-                        f = limitpm1(f + delt);
-                    ss->steps[step] = f;
-                    storage->getPatch().isDirty = true;
-                    repaint();
-                }
-            };
-            q->onMinMaxDef = [this, i](auto *t, int mmd) {
-                if (mmd == 1)
-                    ss->steps[i] = 1.f;
-                if (mmd == -1)
-                    ss->steps[i] = isUnipolar() ? 0.f : -1.f;
-                if (mmd == 0)
-                    ss->steps[i] = 0.f;
+        q->onReturnPressed = [this, i](auto *) { showStepTypein(i); };
 
-                storage->getPatch().isDirty = true;
-                repaint();
-            };
-            stepLayer->addChildComponent(*q);
-            stepSliderOverlays[i] = std::move(q);
-        }
-        {
-            std::string sn = "Trigger Envelopes " + std::to_string(i + 1);
-            auto q = std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(this, sn);
-            q->min = 0;
-            q->max = 3;
-            q->step = 1;
+        q->onGetValue = [this, i](auto *T) { return ss->steps[i]; };
+        q->onValueToString = [this, i](auto *T, float f) -> std::string {
+            auto q = f * 12.f;
 
-            q->onGetValue = [this, i](auto *) {
-                uint64_t maski = ss->trigmask & (UINT64_C(1) << i);
-                uint64_t maski16 = ss->trigmask & (UINT64_C(1) << (i + 16));
-                uint64_t maski32 = ss->trigmask & (UINT64_C(1) << (i + 32));
+            if (fabs(q - std::round(q)) < 0.001)
+            {
+                auto twl = std::string("twelfths");
 
-                if (maski)
-                    return 1.f;
-                if (maski16)
-                    return 2.f;
-                if (maski32)
-                    return 3.f;
-                return 0.f;
-            };
-            q->onSetValue = [this, i](auto *, float f) {
-                int q = round(f);
-                uint64_t b1 = (UINT64_C(1) << i);
-                uint64_t b2 = (UINT64_C(1) << (i + 16));
-                uint64_t b3 = (UINT64_C(1) << (i + 32));
-                uint64_t maskOff = 0xFFFFFFFFFFFFFFFF;
-                uint64_t maskOn = 0;
+                if ((int)fabs(std::round(q)) == 1)
+                    twl = "twelfth";
 
-                if (q == 0)
-                {
-                    maskOff = maskOff & ~b1 & ~b2 & ~b3;
-                }
-                if (q == 1)
-                {
-                    maskOff = maskOff & ~b2 & ~b3;
-                    maskOn = b1;
-                }
-                if (q == 2)
-                {
-                    maskOff = maskOff & ~b1 & ~b3;
-                    maskOn = b2;
-                }
-                if (q == 3)
-                {
-                    maskOff = maskOff & ~b1 & ~b2;
-                    maskOn = b3;
-                }
-                ss->trigmask &= maskOff;
-                ss->trigmask |= maskOn;
-                repaint();
-            };
+                auto res = fmt::format("{:.3f} ({} {})", f, (int)std::round(q), twl);
 
-            q->onJogValue = [this, i](auto *, int dir, auto, auto) {
-                auto s = dynamic_cast<OverlayAsAccessibleSlider<LFOAndStepDisplay> *>(
-                    stepTriggerOverlays[i].get());
-                if (s)
-                {
-                    auto v = s->onGetValue(this);
-                    v = v + dir;
-                    if (v < 0)
-                        v = 3;
-                    if (v > 3)
-                        v = 0;
-                    s->onSetValue(this, v);
-                }
-            };
+                return res;
+            }
 
-            q->onValueToString = [](auto *, float v) {
-                auto q = (int)round(v);
-                switch (q)
-                {
-                case 1:
-                    return "Trigger FEG + AEG";
-                case 2:
-                    return "Trigger FEG";
-                case 3:
-                    return "Trigger AEG";
-                }
-                return "No Triggers";
-            };
-
-            stepLayer->addChildComponent(*q);
-            stepTriggerOverlays[i] = std::move(q);
-        }
-
-        auto l0 = std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(
-            this, "Loop Start Point");
-        l0->min = 0;
-        l0->max = 16;
-        l0->step = 1;
-        l0->onGetValue = [this](auto *) { return ss->loop_start; };
-        l0->onSetValue = [this](auto *, float f) {
-            ss->loop_start = (int)round(f);
-            storage->getPatch().isDirty = true;
-            repaint();
+            return fmt::format("{:.3f}", f);
         };
-        l0->onJogValue = [this](auto *, int dir, bool, bool) {
-            auto n = limit_range(ss->loop_start + dir, 0, 15);
-            ss->loop_start = n;
-            storage->getPatch().isDirty = true;
+
+        q->onSetValue = [this, i](auto *T, float f) {
+            auto bscg = BeginStepGuard(this);
+            ss->steps[i] = f;
+            stepSeqDirty();
             repaint();
+            return;
         };
-        l0->onMinMaxDef = [this](auto *, int mmd) {
+
+        q->onJogValue = [this, i](auto *t, int dir, bool isShift, bool isControl) {
+            auto bscg = BeginStepGuard(this);
+            int step = i;
+
+            if (step >= 0)
+            {
+                auto f = ss->steps[step];
+                auto delt = 0.05;
+
+                if (isControl)
+                    delt = 0.01;
+                if (isShift)
+                    delt = 1.0 / 12.0;
+                if (dir < 0)
+                    delt *= -1;
+
+                if (isUnipolar())
+                    f = limit01(f + delt);
+                else
+                    f = limitpm1(f + delt);
+
+                ss->steps[step] = f;
+                stepSeqDirty();
+                repaint();
+            }
+        };
+
+        q->onMinMaxDef = [this, i](auto *t, int mmd) {
+            auto bscg = BeginStepGuard(this);
+
             if (mmd == 1)
-                ss->loop_start = ss->loop_end;
-            else
-                ss->loop_start = 0;
-            storage->getPatch().isDirty = true;
-            repaint();
-        };
-        loopEndOverlays[0] = std::move(l0);
-        stepLayer->addChildComponent(*loopEndOverlays[0]);
-
-        l0 = std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(this, "Loop End Point");
-        l0->min = 0;
-        l0->max = 16;
-        l0->step = 1;
-        l0->onGetValue = [this](auto *) { return ss->loop_end; };
-        l0->onSetValue = [this](auto *, float f) {
-            ss->loop_end = (int)round(f);
-            storage->getPatch().isDirty = true;
-            repaint();
-        };
-        l0->onJogValue = [this](auto *, int dir, bool, bool) {
-            auto n = limit_range(ss->loop_end + dir, 0, 15);
-            ss->loop_end = n;
-            storage->getPatch().isDirty = true;
-            repaint();
-        };
-        l0->onMinMaxDef = [this](auto *, int mmd) {
+                ss->steps[i] = 1.f;
             if (mmd == -1)
-                ss->loop_end = ss->loop_end;
-            else
-                ss->loop_end = 15;
-            storage->getPatch().isDirty = true;
+                ss->steps[i] = isUnipolar() ? 0.f : -1.f;
+            if (mmd == 0)
+                ss->steps[i] = 0.f;
+
+            stepSeqDirty();
             repaint();
         };
-        loopEndOverlays[1] = std::move(l0);
-        stepLayer->addChildComponent(*loopEndOverlays[1]);
+
+        q->onMenuKey = [this, i](auto *t) { showStepRMB(i); };
+
+        stepLayer->addChildComponent(*q);
+        stepSliderOverlays[i] = std::move(q);
     }
+
+    for (int i = 0; i < n_stepseqsteps; ++i)
+    {
+        std::string sn = "Trigger Envelopes " + std::to_string(i + 1);
+        auto q = std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(this, sn);
+        q->min = 0;
+        q->max = 3;
+        q->step = 1;
+
+        q->onGetValue = [this, i](auto *) {
+            uint64_t maski = ss->trigmask & (UINT64_C(1) << i);
+            uint64_t maski16 = ss->trigmask & (UINT64_C(1) << (i + n_stepseqsteps));
+            uint64_t maski32 = ss->trigmask & (UINT64_C(1) << (i + (n_stepseqsteps * 2)));
+
+            if (maski)
+                return 1.f;
+            if (maski16)
+                return 2.f;
+            if (maski32)
+                return 3.f;
+            return 0.f;
+        };
+
+        q->onSetValue = [this, i](auto *, float f) {
+            int q = round(f);
+            uint64_t b1 = (UINT64_C(1) << i);
+            uint64_t b2 = (UINT64_C(1) << (i + n_stepseqsteps));
+            uint64_t b3 = (UINT64_C(1) << (i + (n_stepseqsteps * 2)));
+            uint64_t maskOff = 0xFFFFFFFFFFFFFFFF;
+            uint64_t maskOn = 0;
+
+            if (q == 0)
+            {
+                maskOff = maskOff & ~b1 & ~b2 & ~b3;
+            }
+            if (q == 1)
+            {
+                maskOff = maskOff & ~b2 & ~b3;
+                maskOn = b1;
+            }
+            if (q == 2)
+            {
+                maskOff = maskOff & ~b1 & ~b3;
+                maskOn = b2;
+            }
+            if (q == 3)
+            {
+                maskOff = maskOff & ~b1 & ~b2;
+                maskOn = b3;
+            }
+            ss->trigmask &= maskOff;
+            ss->trigmask |= maskOn;
+            repaint();
+        };
+
+        q->onJogValue = [this, i](auto *, int dir, auto, auto) {
+            auto s = dynamic_cast<OverlayAsAccessibleSlider<LFOAndStepDisplay> *>(
+                stepTriggerOverlays[i].get());
+            if (s)
+            {
+                auto v = s->onGetValue(this);
+                v = v + dir;
+                if (v < 0)
+                    v = 3;
+                if (v > 3)
+                    v = 0;
+                s->onSetValue(this, v);
+            }
+        };
+
+        q->onValueToString = [](auto *, float v) {
+            auto q = (int)round(v);
+            switch (q)
+            {
+            case 1:
+                return "Trigger Filter env and Amp env";
+            case 2:
+                return "Trigger Filter env";
+            case 3:
+                return "Trigger Amp env";
+            }
+            return "No Triggers";
+        };
+
+        stepLayer->addChildComponent(*q);
+        stepTriggerOverlays[i] = std::move(q);
+    }
+
+    auto l0 =
+        std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(this, "Loop Start Point");
+    l0->min = 0;
+    l0->max = n_stepseqsteps;
+    l0->step = 1;
+    l0->onGetValue = [this](auto *) { return ss->loop_start; };
+    l0->onSetValue = [this](auto *, float f) {
+        auto bscg = BeginStepGuard(this);
+        ss->loop_start = (int)round(f);
+        stepSeqDirty();
+        repaint();
+    };
+    l0->onJogValue = [this](auto *, int dir, bool, bool) {
+        auto bscg = BeginStepGuard(this);
+        auto n = limit_range(ss->loop_start + dir, 0, 15);
+        ss->loop_start = n;
+        stepSeqDirty();
+        repaint();
+    };
+    l0->onMinMaxDef = [this](auto *, int mmd) {
+        auto bscg = BeginStepGuard(this);
+        if (mmd == 1)
+            ss->loop_start = ss->loop_end;
+        else
+            ss->loop_start = 0;
+        stepSeqDirty();
+        repaint();
+    };
+    loopEndOverlays[0] = std::move(l0);
+    stepLayer->addChildComponent(*loopEndOverlays[0]);
+
+    l0 = std::make_unique<OverlayAsAccessibleSlider<LFOAndStepDisplay>>(this, "Loop End Point");
+    l0->min = 0;
+    l0->max = n_stepseqsteps;
+    l0->step = 1;
+    l0->onGetValue = [this](auto *) { return ss->loop_end; };
+    l0->onSetValue = [this](auto *, float f) {
+        auto bscg = BeginStepGuard(this);
+        ss->loop_end = (int)round(f);
+        stepSeqDirty();
+        repaint();
+    };
+    l0->onJogValue = [this](auto *, int dir, bool, bool) {
+        auto bscg = BeginStepGuard(this);
+        auto n = limit_range(ss->loop_end + dir, 0, 15);
+        ss->loop_end = n;
+        stepSeqDirty();
+        repaint();
+    };
+    l0->onMinMaxDef = [this](auto *, int mmd) {
+        auto bscg = BeginStepGuard(this);
+        if (mmd == -1)
+            ss->loop_end = ss->loop_end;
+        else
+            ss->loop_end = 15;
+        stepSeqDirty();
+        repaint();
+    };
+    loopEndOverlays[1] = std::move(l0);
+    stepLayer->addChildComponent(*loopEndOverlays[1]);
 }
 
 void LFOAndStepDisplay::resized()
@@ -280,6 +357,8 @@ void LFOAndStepDisplay::resized()
         shaperect[i] = juce::Rectangle<int>(xp, yp, 25, 15);
         typeAccOverlays[i]->setBounds(shaperect[i]);
     }
+    stepJogOverlays[0]->setBounds(ss_shift_right.toNearestInt());
+    stepJogOverlays[1]->setBounds(ss_shift_left.toNearestInt());
     loopEndOverlays[0]->setBounds(left_panel.getX(), waveform_display.getHeight() - 10, 10, 10);
     loopEndOverlays[1]->setBounds(left_panel.getX() + 10, waveform_display.getHeight() - 10, 10,
                                   10);
@@ -338,10 +417,97 @@ void LFOAndStepDisplay::paint(juce::Graphics &g)
     }
     else
     {
-        paintWaveform(g);
+
+        if (!paramsHasChanged())
+        {
+            g.drawImage(*backingImage, getLocalBounds().toFloat(),
+                        juce::RectanglePlacement::fillDestination);
+            paintTypeSelector(g);
+            return;
+        }
+        else
+        {
+            juce::Colour color =
+                juce::Colour((unsigned char)0, (unsigned char)0, (unsigned char)0, 0.f);
+
+            backingImage->clear(backingImage->getBounds());
+        }
+
+        juce::Graphics gr = juce::Graphics(*backingImage);
+        float zoomFloat = (float)zoomFactor / 100.f;
+
+        gr.addTransform(juce::AffineTransform().scale(zoomFloat * 2.f));
+
+        paintWaveform(gr);
+
+        g.drawImage(*backingImage, getLocalBounds().toFloat(),
+                    juce::RectanglePlacement::fillDestination);
+        waveformIsUpdated = false;
     }
 
     paintTypeSelector(g);
+}
+
+bool LFOAndStepDisplay::paramsHasChanged()
+{
+    bool hasChanged = false;
+
+    auto *p = &lfodata->rate;      // look in the definition of LFOStorage for which param is first
+    while (p <= &lfodata->release) // and last
+    {
+
+        if (paramsFromLastDrawCall[p->param_id_in_scene].i != p->val.i)
+            hasChanged = true;
+
+        paramsFromLastDrawCall[p->param_id_in_scene].i = p->val.i;
+        ++p;
+    };
+
+    if (lfodata->rate.deactivated != settingsFromLastDrawCall[0].b)
+    {
+        settingsFromLastDrawCall[0].b = lfodata->rate.deactivated;
+        hasChanged = true;
+    }
+
+    if (lfodata->deform.deform_type != paramsFromLastDrawCall[1].i)
+    {
+        paramsFromLastDrawCall[1].i = lfodata->deform.deform_type;
+        hasChanged = true;
+    }
+
+    if (lfodata->rate.temposync != paramsFromLastDrawCall[2].b)
+    {
+        paramsFromLastDrawCall[2].b = lfodata->rate.temposync;
+        hasChanged = true;
+    }
+
+    if (lfoStorageFromLastDrawingCall != lfodata)
+        hasChanged = true;
+
+    if (forceRepaint)
+    {
+        hasChanged = true;
+        forceRepaint = false;
+    }
+
+    lfoStorageFromLastDrawingCall = lfodata;
+
+    return hasChanged;
+}
+
+void LFOAndStepDisplay::setZoomFactor(int zoom)
+{
+
+    if (zoomFactor != zoom)
+    {
+        float zoomFloat = (float)zoom / 100.f;
+        forceRepaint = true;
+        backingImage = std::make_unique<juce::Image>(juce::Image::PixelFormat::ARGB,
+                                                     outer.getWidth() * zoomFloat * 2,
+                                                     outer.getHeight() * zoomFloat * 2, true);
+    }
+
+    zoomFactor = zoom;
 }
 
 void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
@@ -419,8 +585,8 @@ void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
     if (lfodata->rate.deactivated)
     {
         hasFullWave = true;
-        memcpy((void *)(&deactivateStorage), (void *)lfodata, sizeof(LFOStorage));
-        memcpy((void *)tpd, (void *)tp, n_scene_params * sizeof(pdata));
+        deactivateStorage = *lfodata;
+        std::copy(std::begin(tp), std::end(tp), std::begin(tpd));
 
         auto desiredRate = log2(1.f / totalEnvTime);
         if (lfodata->shape.val.i == lt_mseg)
@@ -446,8 +612,8 @@ void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
         {
             hasFullWave = true;
             waveIsAmpWave = true;
-            memcpy((void *)(&deactivateStorage), (void *)lfodata, sizeof(LFOStorage));
-            memcpy((void *)tpd, (void *)tp, n_scene_params * sizeof(pdata));
+            deactivateStorage = *lfodata;
+            std::copy(std::begin(tp), std::end(tp), std::begin(tpd));
 
             deactivateStorage.magnitude.val.f = 1.f;
             tpd[lfodata->magnitude.param_id_in_scene].f = 1.f;
@@ -475,8 +641,9 @@ void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
     }
 
     int minSamples = (1 << 0) * (int)(waveform_display.getWidth());
-    int totalSamples = std::max((int)minSamples, (int)(totalEnvTime * samplerate / BLOCK_SIZE));
-    float drawnTime = totalSamples * samplerate_inv * BLOCK_SIZE;
+    int totalSamples =
+        std::max((int)minSamples, (int)(totalEnvTime * storage->samplerate / BLOCK_SIZE));
+    float drawnTime = totalSamples * storage->samplerate_inv * BLOCK_SIZE;
 
     // OK so let's assume we want about 1000 pixels worth tops in
     int averagingWindow = (int)(totalSamples / 1000.0) + 1;
@@ -520,7 +687,7 @@ void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
 
             if (susCountdown < 0 && tlfo->env_state == lfoeg_stuck)
             {
-                susCountdown = susTime * samplerate / BLOCK_SIZE;
+                susCountdown = susTime * storage->samplerate / BLOCK_SIZE;
             }
             else if (susCountdown == 0 && tlfo->env_state == lfoeg_stuck)
             {
@@ -753,13 +920,12 @@ void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
 
                 g.drawLine(sp.getX(), sp.getY(), ep.getX(), ep.getY(), 1.0);
 
-                char s[TXT_SIZE];
-                snprintf(s, TXT_SIZE, "%d", l + 1);
+                std::string s = fmt::format("{:d}", l + 1);
 
                 juce::Point<int> tp(xp + 1, valScale * 0.0);
                 tp = tp.transformedBy(at);
                 g.setColour(skin->getColor(Colors::LFO::Waveform::Ruler::Text));
-                g.setFont(Surge::GUI::getFontManager()->lfoTypeFont);
+                g.setFont(skin->fontManager->lfoTypeFont);
                 g.drawText(s, tp.x, tp.y, 20, 10, juce::Justification::bottomLeft);
             }
             else if (everyMeasure == 1)
@@ -826,16 +992,20 @@ void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
         float yp = valScale * 0.9;
         float typ = yp;
         auto tp = juce::Point<float>(xp + 0.5, typ + 0.5).transformedBy(at);
+
         g.setColour(skin->getColor(Colors::LFO::Waveform::Ruler::Text));
-        g.setFont(Surge::GUI::getFontManager()->lfoTypeFont);
-        char txt[TXT_SIZE];
+        g.setFont(skin->fontManager->lfoTypeFont);
+
+        std::string txt;
         float tv = delta * l;
+
         if (fabs(roundf(tv) - tv) < 0.05)
-            snprintf(txt, TXT_SIZE, "%d s", (int)round(delta * l));
+            txt = fmt::format("{:d} s", (int)round(delta * l));
         else if (delta < 0.1)
-            snprintf(txt, TXT_SIZE, "%.2f s", delta * l);
+            txt = fmt::format("{:.2f} s", delta * l);
         else
-            snprintf(txt, TXT_SIZE, "%.1f s", delta * l);
+            txt = fmt::format("{:.1f} s", delta * l);
+
         g.drawText(txt, tp.x, tp.y, 30, 10, juce::Justification::topLeft);
 
         auto sp = juce::Point<float>(xp, valScale * 0.95).transformedBy(at);
@@ -865,7 +1035,7 @@ void LFOAndStepDisplay::paintWaveform(juce::Graphics &g)
     if (warnForInvalid)
     {
         g.setColour(skin->getColor(Colors::LFO::Waveform::Wave));
-        g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(14, juce::Font::bold));
+        g.setFont(skin->fontManager->getLatoAtSize(14, juce::Font::bold));
         g.drawText(invalidMessage, waveform_display.withTrimmedBottom(30),
                    juce::Justification::centred);
     }
@@ -935,8 +1105,8 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
                 auto gatebgcolor = stepcolor;
 
                 uint64_t maski = ss->trigmask & (UINT64_C(1) << i);
-                uint64_t maski16 = ss->trigmask & (UINT64_C(1) << (i + 16));
-                uint64_t maski32 = ss->trigmask & (UINT64_C(1) << (i + 32));
+                uint64_t maski16 = ss->trigmask & (UINT64_C(1) << (i + n_stepseqsteps));
+                uint64_t maski32 = ss->trigmask & (UINT64_C(1) << (i + (n_stepseqsteps * 2)));
 
                 gstep = gstep.withTrimmedTop(1).withTrimmedLeft(1).withTrimmedRight(
                     i == n_stepseqsteps - 1 ? 1 : 0);
@@ -1160,8 +1330,9 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
     auto boxo = rect_steps;
 
     int minSamples = (1 << 4) * boxo.getWidth();
-    int totalSamples = std::max((int)minSamples, (int)(totalSampleTime * samplerate / BLOCK_SIZE));
-    float cycleSamples = cyclesec * samplerate / BLOCK_SIZE;
+    int totalSamples =
+        std::max((int)minSamples, (int)(totalSampleTime * storage->samplerate / BLOCK_SIZE));
+    float cycleSamples = cyclesec * storage->samplerate / BLOCK_SIZE;
 
     // OK so lets assume we want about 1000 pixels worth tops in
     int averagingWindow = (int)(totalSamples / 2000.0) + 1;
@@ -1186,7 +1357,7 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
 
             if (susCountdown < 0 && tlfo->env_state == lfoeg_stuck)
             {
-                susCountdown = susTime * samplerate / BLOCK_SIZE;
+                susCountdown = susTime * storage->samplerate / BLOCK_SIZE;
             }
             else if (susCountdown == 0 && tlfo->env_state == lfoeg_stuck)
             {
@@ -1254,11 +1425,9 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
 
     auto q = boxo;
 
-    auto tf = juce::AffineTransform()
-                  .scaled(boxo.getWidth() / valScale, boxo.getHeight() / valScale)
-                  .translated(q.getTopLeft().x, q.getTopLeft().y);
-
-    auto tfpath = tf;
+    const auto tfpath = juce::AffineTransform()
+                            .scaled(boxo.getWidth() / valScale, boxo.getHeight() / valScale)
+                            .translated(q.getTopLeft().x, q.getTopLeft().y);
 
     g.setColour(skin->getColor(Colors::LFO::StepSeq::Envelope));
 
@@ -1276,29 +1445,9 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
     if (dragMode == ARROW)
     {
         auto l = juce::Line<float>{arrowStart, arrowEnd};
-        juce::Point<float> p;
 
-        auto th = juce::Line<float>{rect_steps.getTopLeft(), rect_steps.getTopRight()};
-        auto bh = juce::Line<float>{rect_steps.getBottomLeft(), rect_steps.getBottomRight()};
-        auto lv = juce::Line<float>{rect_steps.getTopLeft(), rect_steps.getBottomLeft()};
-        auto rv = juce::Line<float>{rect_steps.getTopRight(), rect_steps.getBottomRight()};
+        Surge::GUI::constrainPointOnLineWithinRectangle(rect_steps, l, arrowEnd);
 
-        if (l.intersects(th, p))
-        {
-            arrowEnd = p;
-        }
-        else if (l.intersects(bh, p))
-        {
-            arrowEnd = p;
-        }
-        else if (l.intersects(lv, p))
-        {
-            arrowEnd = p;
-        }
-        else if (l.intersects(rv, p))
-        {
-            arrowEnd = p;
-        }
         l = juce::Line<float>{arrowStart, arrowEnd};
 
         auto ph = juce::Path();
@@ -1312,23 +1461,19 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
     // Finally draw the drag label
     if (dragMode == VALUES && draggedStep >= 0 && draggedStep < n_stepseqsteps)
     {
-        int prec = 2;
+        const int displayPrecision = Surge::Storage::getValueDisplayPrecision(storage);
 
-        if (storage)
-        {
-            int detailedMode = Surge::Storage::getUserDefaultValue(
-                storage, Surge::Storage::HighPrecisionReadouts, 0);
+        g.setFont(skin->fontManager->lfoTypeFont);
 
-            if (detailedMode)
-            {
-                prec = 6;
-            }
-        }
+        std::string txt =
+            fmt::format("{:.{}f} %", ss->steps[draggedStep] * 100.f, displayPrecision);
 
-        float dragX, dragY;
-        float dragW = (prec > 4 ? 60 : 40), dragH = (keyModMult ? 22 : 12);
+        int sw = SST_STRING_WIDTH_INT(g.getCurrentFont(), txt);
 
         auto sr = steprect[draggedStep];
+
+        float dragX = sr.getRight(), dragY;
+        float dragW = 6 + sw, dragH = (keyModMult ? 22 : 12);
 
         // Draw to the right in the second half of the seq table
         if (draggedStep < n_stepseqsteps / 2)
@@ -1341,6 +1486,7 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
         }
 
         float yTop;
+
         if (lfodata->unipolar.val.b)
         {
             auto sv = std::max(ss->steps[draggedStep], 0.f);
@@ -1362,7 +1508,9 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
         }
 
         if (dragY < 2)
+        {
             dragY = 2;
+        }
 
         auto labelR = juce::Rectangle<float>(dragX, dragY, dragW, dragH);
 
@@ -1370,21 +1518,16 @@ void LFOAndStepDisplay::paintStepSeq(juce::Graphics &g)
         labelR = labelR.reduced(1, 1);
         fillr(labelR, skin->getColor(Colors::LFO::StepSeq::InfoWindow::Background));
 
-        labelR = labelR.withTrimmedLeft(1).withHeight(10);
-
-        char txt[TXT_SIZE];
-        snprintf(txt, TXT_SIZE, "%.*f %%", prec, ss->steps[draggedStep] * 100.f);
+        labelR = labelR.withTrimmedLeft(2).withHeight(10);
 
         g.setColour(skin->getColor(Colors::LFO::StepSeq::InfoWindow::Text));
-        g.setFont(Surge::GUI::getFontManager()->lfoTypeFont);
         g.drawText(txt, labelR, juce::Justification::centredLeft);
 
         if (keyModMult > 0)
         {
             labelR = labelR.translated(0, 10);
-
-            snprintf(txt, TXT_SIZE, "%d/%d",
-                     (int)(floor(ss->steps[draggedStep] * keyModMult + 0.5)), keyModMult);
+            txt = fmt::format("{:d}/{:d}", (int)(floor(ss->steps[draggedStep] * keyModMult + 0.5)),
+                              keyModMult);
             g.drawText(txt, labelR, juce::Justification::centredLeft);
         }
     }
@@ -1446,10 +1589,56 @@ void LFOAndStepDisplay::setStepToDefault(const juce::MouseEvent &event)
 {
     for (int i = 0; i < n_stepseqsteps; ++i)
     {
-        if (steprect[i].contains(event.position))
+        draggedStep = -1;
+
+        if (event.mouseWasDraggedSinceMouseDown())
         {
-            ss->steps[i] = 0.f;
-            storage->getPatch().isDirty = true;
+            auto r = steprect[i];
+
+            float rx0 = r.getX();
+            float rx1 = r.getX() + r.getWidth();
+            float ry0 = r.getY();
+            float ry1 = r.getY() + r.getHeight();
+
+            if (event.position.x >= rx0 && event.position.x < rx1)
+            {
+                draggedStep = i;
+            }
+        }
+
+        if (draggedStep >= 0 || (event.mouseWasClicked() && steprect[i].contains(event.position)))
+        {
+            auto bscg = BeginStepGuard(this);
+
+            if (draggedStep == -1) // mouse down only case
+            {
+                ss->steps[i] = 0.f;
+            }
+            else // we are dragging
+            {
+                int startStep = draggedStep;
+
+                for (int i = 0; i < n_stepseqsteps; ++i)
+                {
+                    if (steprect[i].contains(event.mouseDownPosition))
+                    {
+                        startStep = i;
+                        break;
+                    }
+                }
+
+                if (startStep > draggedStep)
+                {
+                    std::swap(startStep, draggedStep);
+                }
+
+                for (int i = startStep; i <= draggedStep; i++)
+                {
+                    ss->steps[i] = 0.f;
+                }
+            }
+
+            stepSeqDirty();
             repaint();
         }
     }
@@ -1466,17 +1655,43 @@ void LFOAndStepDisplay::setStepValue(const juce::MouseEvent &event)
         quantStep = storage->currentScale.count;
     }
 
+    draggedStep = -1;
+
+    bool yPosActivity = false;
+
     for (int i = 0; i < n_stepseqsteps; ++i)
     {
         auto r = steprect[i];
 
         float rx0 = r.getX();
         float rx1 = r.getX() + r.getWidth();
-        if (event.position.x >= rx0 && event.position.x < rx1)
+        float ry0 = r.getY();
+        float ry1 = r.getY() + r.getHeight();
+
+        if ((event.position.x >= rx0 && event.position.x < rx1) || yPosActivity)
         {
             draggedStep = i;
+        }
 
+        if (event.position.y >= ry0 && event.position.y < ry1)
+        {
+            if (event.position.x < steprect[0].getX())
+            {
+                draggedStep = 0;
+                yPosActivity = true;
+            }
+
+            if (event.position.x >= steprect[n_stepseqsteps - 1].getX())
+            {
+                draggedStep = n_stepseqsteps - 1;
+                yPosActivity = true;
+            }
+        }
+
+        if (draggedStep >= 0 || yPosActivity)
+        {
             float f;
+            auto bscg = BeginStepGuard(this);
 
             if (isUnipolar())
             {
@@ -1507,8 +1722,8 @@ void LFOAndStepDisplay::setStepValue(const juce::MouseEvent &event)
                 }
             }
 
-            ss->steps[i] = f;
-            storage->getPatch().isDirty = true;
+            ss->steps[draggedStep] = f;
+            stepSeqDirty();
 
             repaint();
         }
@@ -1521,6 +1736,7 @@ void LFOAndStepDisplay::onSkinChanged()
     {
         return;
     }
+    forceRepaint = true;
     auto typesWithHover = skin->standardHoverAndHoverOnForIDB(IDB_LFO_TYPE, associatedBitmapStore);
     typeImg = typesWithHover[0];
     typeImgHover = typesWithHover[1];
@@ -1553,6 +1769,8 @@ void LFOAndStepDisplay::mouseDown(const juce::MouseEvent &event)
         }
     }
 
+    mouseDownLongHold(event);
+
     if (waveform_display.contains(event.position.toInt()) && sge)
     {
         if (isMSEG() || isFormula())
@@ -1584,49 +1802,13 @@ void LFOAndStepDisplay::mouseDown(const juce::MouseEvent &event)
 
         if (ss_shift_left.contains(event.position))
         {
-            float t = ss->steps[0];
-
-            for (int i = 0; i < (n_stepseqsteps - 1); i++)
-            {
-                ss->steps[i] = ss->steps[i + 1];
-                assert((i >= 0) && (i < n_stepseqsteps));
-            }
-
-            ss->steps[n_stepseqsteps - 1] = t;
-            ss->trigmask = (((ss->trigmask & 0x000000000000fffe) >> 1) |
-                            (((ss->trigmask & 1) << 15) & 0xffff)) |
-                           (((ss->trigmask & 0x00000000fffe0000) >> 1) |
-                            (((ss->trigmask & 0x10000) << 15) & 0xffff0000)) |
-                           (((ss->trigmask & 0x0000fffe00000000) >> 1) |
-                            (((ss->trigmask & 0x100000000) << 15) & 0xffff00000000));
-
-            storage->getPatch().isDirty = true;
-            repaint();
-
+            shiftLeft();
             return;
         }
 
         if (ss_shift_right.contains(event.position))
         {
-            float t = ss->steps[n_stepseqsteps - 1];
-
-            for (int i = (n_stepseqsteps - 2); i >= 0; i--)
-            {
-                ss->steps[i + 1] = ss->steps[i];
-                assert((i >= 0) && (i < n_stepseqsteps));
-            }
-
-            ss->steps[0] = t;
-            ss->trigmask = (((ss->trigmask & 0x0000000000007fff) << 1) |
-                            (((ss->trigmask & 0x0000000000008000) >> 15) & 0xffff)) |
-                           (((ss->trigmask & 0x000000007fff0000) << 1) |
-                            (((ss->trigmask & 0x0000000080000000) >> 15) & 0xffff0000)) |
-                           (((ss->trigmask & 0x00007fff00000000) << 1) |
-                            (((ss->trigmask & 0x0000800000000000) >> 15) & 0xffff00000000));
-
-            storage->getPatch().isDirty = true;
-            repaint();
-
+            shiftRight();
             return;
         }
 
@@ -1651,6 +1833,12 @@ void LFOAndStepDisplay::mouseDown(const juce::MouseEvent &event)
                     dragMode = ARROW;
                     arrowStart = event.position;
                     arrowEnd = event.position;
+                    juce::Timer::callAfterDelay(
+                        1000, [w = juce::Component::SafePointer(this), event] {
+                            if (w && w->dragMode == ARROW &&
+                                w->arrowStart.getDistanceSquaredFrom(w->arrowEnd) < 2)
+                                w->showStepRMB(event);
+                        });
                 }
                 else
                 {
@@ -1666,11 +1854,12 @@ void LFOAndStepDisplay::mouseDown(const juce::MouseEvent &event)
 
             if (r.contains(event.position))
             {
+                auto bscg = BeginStepGuard(this);
                 dragMode = TRIGGERS;
 
                 uint64_t maski = ss->trigmask & (UINT64_C(1) << i);
-                uint64_t maski16 = ss->trigmask & (UINT64_C(1) << (i + 16));
-                uint64_t maski32 = ss->trigmask & (UINT64_C(1) << (i + 32));
+                uint64_t maski16 = ss->trigmask & (UINT64_C(1) << (i + n_stepseqsteps));
+                uint64_t maski32 = ss->trigmask & (UINT64_C(1) << (i + (n_stepseqsteps * 2)));
                 uint64_t maskOn = 0;
                 uint64_t maskOff = 0xFFFFFFFFFFFFFFFF;
 
@@ -1694,23 +1883,23 @@ void LFOAndStepDisplay::mouseDown(const juce::MouseEvent &event)
                 {
                     if (maski || ~maski)
                     {
-                        maskOn = (UINT64_C(1) << (i + 16));
+                        maskOn = (UINT64_C(1) << (i + n_stepseqsteps));
                         maskOff = ~maski;
-                        dragTrigger0 = UINT64_C(1) << 16;
+                        dragTrigger0 = UINT64_C(1) << n_stepseqsteps;
                     }
 
                     if (maski16)
                     {
-                        maskOn = (UINT64_C(1) << (i + 32));
+                        maskOn = (UINT64_C(1) << (i + (n_stepseqsteps * 2)));
                         maskOff = ~maski16;
-                        dragTrigger0 = UINT64_C(1) << 32;
+                        dragTrigger0 = UINT64_C(1) << (n_stepseqsteps * 2);
                     }
                 }
 
                 ss->trigmask &= maskOff;
                 ss->trigmask |= maskOn;
 
-                storage->getPatch().isDirty = true;
+                stepSeqDirty();
                 repaint();
 
                 return;
@@ -1719,17 +1908,64 @@ void LFOAndStepDisplay::mouseDown(const juce::MouseEvent &event)
     }
 }
 
+void LFOAndStepDisplay::shiftLeft()
+{
+    auto bscg = BeginStepGuard(this);
+    float t = ss->steps[0];
+
+    for (int i = 0; i < (n_stepseqsteps - 1); i++)
+    {
+        ss->steps[i] = ss->steps[i + 1];
+        assert((i >= 0) && (i < n_stepseqsteps));
+    }
+
+    ss->steps[n_stepseqsteps - 1] = t;
+    ss->trigmask =
+        (((ss->trigmask & 0x000000000000fffe) >> 1) | (((ss->trigmask & 1) << 15) & 0xffff)) |
+        (((ss->trigmask & 0x00000000fffe0000) >> 1) |
+         (((ss->trigmask & 0x10000) << 15) & 0xffff0000)) |
+        (((ss->trigmask & 0x0000fffe00000000) >> 1) |
+         (((ss->trigmask & 0x100000000) << 15) & 0xffff00000000));
+
+    stepSeqDirty();
+    repaint();
+}
+
+void LFOAndStepDisplay::shiftRight()
+{
+    auto bscg = BeginStepGuard(this);
+    float t = ss->steps[n_stepseqsteps - 1];
+
+    for (int i = (n_stepseqsteps - 2); i >= 0; i--)
+    {
+        ss->steps[i + 1] = ss->steps[i];
+        assert((i >= 0) && (i < n_stepseqsteps));
+    }
+
+    ss->steps[0] = t;
+    ss->trigmask = (((ss->trigmask & 0x0000000000007fff) << 1) |
+                    (((ss->trigmask & 0x0000000000008000) >> 15) & 0xffff)) |
+                   (((ss->trigmask & 0x000000007fff0000) << 1) |
+                    (((ss->trigmask & 0x0000000080000000) >> 15) & 0xffff0000)) |
+                   (((ss->trigmask & 0x00007fff00000000) << 1) |
+                    (((ss->trigmask & 0x0000800000000000) >> 15) & 0xffff00000000));
+
+    stepSeqDirty();
+    repaint();
+}
+
 void LFOAndStepDisplay::mouseExit(const juce::MouseEvent &event)
 {
-    lfoTypeHover = -1;
-    stepSeqShiftHover = -1;
-
     if (overWaveform)
     {
         enterExitWaveform(false);
     }
-    overWaveform = false;
-    repaint();
+
+    lfoTypeHover = -1;
+    overWaveform = -1;
+    stepSeqShiftHover = -1;
+
+    endHover();
 }
 
 void LFOAndStepDisplay::enterExitWaveform(bool isInWF)
@@ -1749,6 +1985,8 @@ void LFOAndStepDisplay::enterExitWaveform(bool isInWF)
 
 void LFOAndStepDisplay::mouseMove(const juce::MouseEvent &event)
 {
+    mouseMoveLongHold(event);
+
     int nextHover = -1;
 
     for (int i = 0; i < n_lfo_types; ++i)
@@ -1857,6 +2095,8 @@ void LFOAndStepDisplay::mouseDrag(const juce::MouseEvent &event)
         return;
     }
 
+    mouseDragLongHold(event);
+
     if (dragMode != NONE && event.getDistanceFromDragStart() > 0)
     {
         if (!Surge::GUI::showCursor(storage))
@@ -1895,8 +2135,9 @@ void LFOAndStepDisplay::mouseDrag(const juce::MouseEvent &event)
         {
             if (ss->loop_start != loopStart && loopStart >= 0)
             {
+                auto bscg = BeginStepGuard(this);
                 ss->loop_start = loopStart;
-                storage->getPatch().isDirty = true;
+                stepSeqDirty();
                 repaint();
             }
         }
@@ -1904,8 +2145,9 @@ void LFOAndStepDisplay::mouseDrag(const juce::MouseEvent &event)
         {
             if (ss->loop_end != loopStart && loopStart >= 0)
             {
+                auto bscg = BeginStepGuard(this);
                 ss->loop_end = loopStart;
-                storage->getPatch().isDirty = true;
+                stepSeqDirty();
                 repaint();
             }
         }
@@ -1933,10 +2175,11 @@ void LFOAndStepDisplay::mouseDrag(const juce::MouseEvent &event)
             auto r = gaterect[i];
             auto otm = ss->trigmask;
 
-            if (r.contains(event.position))
+            if (event.position.x >= r.getX() && event.position.x < r.getX() + r.getWidth())
             {
-                auto off = UINT64_MAX & ~(UINT64_C(1) << i) & ~(UINT64_C(1) << (i + 16)) &
-                           ~(UINT64_C(1) << (i + 32));
+                auto off = UINT64_MAX & ~(UINT64_C(1) << i) &
+                           ~(UINT64_C(1) << (i + n_stepseqsteps)) &
+                           ~(UINT64_C(1) << (i + (n_stepseqsteps * 2)));
                 auto on = dragTrigger0 << i;
 
                 ss->trigmask &= off;
@@ -1968,6 +2211,8 @@ void LFOAndStepDisplay::mouseDrag(const juce::MouseEvent &event)
 
 void LFOAndStepDisplay::mouseUp(const juce::MouseEvent &event)
 {
+    mouseUpLongHold(event);
+
     if (event.mouseWasDraggedSinceMouseDown())
     {
         if (!Surge::GUI::showCursor(storage))
@@ -1976,8 +2221,17 @@ void LFOAndStepDisplay::mouseUp(const juce::MouseEvent &event)
         }
     }
 
-    if (dragMode == ARROW)
+    if (dragMode == ARROW && (!event.mouseWasDraggedSinceMouseDown() ||
+                              (arrowStart.getDistanceSquaredFrom(arrowEnd) < 2)))
     {
+        showStepRMB(event);
+    }
+    else if (dragMode == ARROW)
+    {
+        auto l = juce::Line<float>{arrowStart, arrowEnd};
+
+        Surge::GUI::constrainPointOnLineWithinRectangle(rect_steps, l, arrowEnd);
+
         auto rmStepStart = arrowStart;
         auto rmStepCurr = arrowEnd;
 
@@ -1995,14 +2249,16 @@ void LFOAndStepDisplay::mouseUp(const juce::MouseEvent &event)
             quantStep = storage->currentScale.count;
         }
 
-        for (int i = 0; i < 16; ++i)
+        for (int i = 0; i < n_stepseqsteps; ++i)
         {
             if (steprect[i].contains(rmStepStart))
             {
                 startStep = i;
             }
 
-            if (steprect[i].contains(rmStepCurr))
+            // we expand steprect so that we accept edge points on the rectangle
+            // since .contains() only checks if a point is within the rect, not ON its edges
+            if (steprect[i].expanded(1, 1).contains(rmStepCurr))
             {
                 endStep = i;
             }
@@ -2012,6 +2268,7 @@ void LFOAndStepDisplay::mouseUp(const juce::MouseEvent &event)
 
         if (s >= 0 && e >= 0 && s != e) // s == e is the abort gesture
         {
+            auto bscg = BeginStepGuard(this);
             float fs = (float)(steprect[s].getBottom() - rmStepStart.y) / steprect[s].getHeight();
             float fe = (float)(steprect[e].getBottom() - rmStepCurr.y) / steprect[e].getHeight();
 
@@ -2033,7 +2290,6 @@ void LFOAndStepDisplay::mouseUp(const juce::MouseEvent &event)
             }
 
             ss->steps[s] = fs;
-            storage->getPatch().isDirty = true;
 
             if (s != e)
             {
@@ -2064,10 +2320,10 @@ void LFOAndStepDisplay::mouseUp(const juce::MouseEvent &event)
                     }
 
                     ss->steps[q] = f;
-                    storage->getPatch().isDirty = true;
                 }
             }
 
+            stepSeqDirty();
             repaint();
         }
     }
@@ -2093,6 +2349,8 @@ void LFOAndStepDisplay::mouseWheelMove(const juce::MouseEvent &event,
     {
         return;
     }
+
+    auto bscg = BeginStepGuard(this);
 
     float delta = wheel.deltaX - (wheel.isReversed ? 1 : -1) * wheel.deltaY;
 #if MAC
@@ -2125,7 +2383,7 @@ void LFOAndStepDisplay::mouseWheelMove(const juce::MouseEvent &event,
             }
 
             ss->steps[i] = v;
-            storage->getPatch().isDirty = true;
+            stepSeqDirty();
             repaint();
         }
     }
@@ -2143,7 +2401,9 @@ void LFOAndStepDisplay::showLFODisplayPopupMenu(SurgeGUIEditor::OverlayTags tag)
 
     auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(olname, hurl);
     hmen->setSkin(skin, associatedBitmapStore);
-    contextMenu.addCustomItem(-1, std::move(hmen));
+    auto hment = hmen->getTitle();
+
+    contextMenu.addCustomItem(-1, std::move(hmen), nullptr, hment);
 
     contextMenu.addSeparator();
 
@@ -2156,14 +2416,14 @@ void LFOAndStepDisplay::showLFODisplayPopupMenu(SurgeGUIEditor::OverlayTags tag)
 
     std::string openname = (sge->isAnyOverlayPresent(tag)) ? "Close " : "Open ";
 
-    Surge::GUI::addMenuWithShortcut(
-        contextMenu, Surge::GUI::toOSCaseForMenu(openname + olname + "..."),
-        sge->showShortcutDescription("Alt+E", "⌥E"), [this, sge, tag]() {
-            if (sge)
-            {
-                sge->toggleOverlay(tag);
-            }
-        });
+    Surge::GUI::addMenuWithShortcut(contextMenu, Surge::GUI::toOSCase(openname + olname + "..."),
+                                    sge->showShortcutDescription("Alt+E", "⌥E"),
+                                    [this, sge, tag]() {
+                                        if (sge)
+                                        {
+                                            sge->toggleOverlay(tag);
+                                        }
+                                    });
 
     if (isMSEG())
     {
@@ -2171,7 +2431,7 @@ void LFOAndStepDisplay::showLFODisplayPopupMenu(SurgeGUIEditor::OverlayTags tag)
 
         bool isChecked = ms->loopMode == MSEGStorage::ONESHOT;
 
-        contextMenu.addItem(Surge::GUI::toOSCaseForMenu("No Looping"), true, isChecked,
+        contextMenu.addItem(Surge::GUI::toOSCase("No Looping"), true, isChecked,
                             [this, isChecked, sge]() {
                                 if (isChecked)
                                 {
@@ -2191,7 +2451,7 @@ void LFOAndStepDisplay::showLFODisplayPopupMenu(SurgeGUIEditor::OverlayTags tag)
 
         isChecked = ms->loopMode == MSEGStorage::LOOP;
 
-        contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Loop Always"), true, isChecked,
+        contextMenu.addItem(Surge::GUI::toOSCase("Loop Always"), true, isChecked,
                             [this, isChecked, sge]() {
                                 if (isChecked)
                                 {
@@ -2211,7 +2471,7 @@ void LFOAndStepDisplay::showLFODisplayPopupMenu(SurgeGUIEditor::OverlayTags tag)
 
         isChecked = ms->loopMode == MSEGStorage::GATED_LOOP;
 
-        contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Loop Until Release"), true, isChecked,
+        contextMenu.addItem(Surge::GUI::toOSCase("Loop Until Release"), true, isChecked,
                             [this, isChecked, sge]() {
                                 if (isChecked)
                                 {
@@ -2230,7 +2490,7 @@ void LFOAndStepDisplay::showLFODisplayPopupMenu(SurgeGUIEditor::OverlayTags tag)
                             });
     }
 
-    contextMenu.showMenuAsync(juce::PopupMenu::Options());
+    contextMenu.showMenuAsync(guiEditor->popupMenuOptions());
 }
 
 void LFOAndStepDisplay::populateLFOMS(LFOModulationSource *s)
@@ -2243,7 +2503,8 @@ void LFOAndStepDisplay::populateLFOMS(LFOModulationSource *s)
     if (s->isVoice)
         s->formulastate.velocity = 100;
 
-    Surge::Formula::setupEvaluatorStateFrom(s->formulastate, storage->getPatch());
+    Surge::Formula::setupEvaluatorStateFrom(s->formulastate, storage->getPatch(),
+                                            guiEditor->current_scene);
 }
 
 void LFOAndStepDisplay::updateShapeTo(int i)
@@ -2260,7 +2521,7 @@ void LFOAndStepDisplay::updateShapeTo(int i)
 
         sge->refresh_mod();
         sge->broadcastPluginAutomationChangeFor(&(lfodata->shape));
-
+        forceRepaint = true;
         repaint();
 
         sge->lfoShapeChanged(prior, i);
@@ -2288,8 +2549,17 @@ void LFOAndStepDisplay::setupAccessibility()
         auto t = std::string(lt_names[i]);
         if (i == lfodata->shape.val.i)
             t += "  active";
+        auto pt = typeAccOverlays[i]->getTitle();
         typeAccOverlays[i]->setTitle(t);
         typeAccOverlays[i]->setDescription(t);
+
+        if (t != pt)
+        {
+            if (auto h = typeAccOverlays[i]->getAccessibilityHandler())
+            {
+                h->notifyAccessibilityEvent(juce::AccessibilityEvent::titleChanged);
+            }
+        }
     }
 
     for (const auto &s : stepSliderOverlays)
@@ -2297,6 +2567,10 @@ void LFOAndStepDisplay::setupAccessibility()
             s->setVisible(showStepSliders);
 
     for (const auto &s : loopEndOverlays)
+        if (s)
+            s->setVisible(showStepSliders);
+
+    for (const auto &s : stepJogOverlays)
         if (s)
             s->setVisible(showStepSliders);
 
@@ -2341,6 +2615,122 @@ bool LFOAndStepDisplay::keyPressed(const juce::KeyPress &key)
     }
 
     return false;
+}
+
+void LFOAndStepDisplay::prepareForEdit()
+{
+    jassert(stepDirtyCount == 0);
+    stepDirtyCount++;
+    undoStorageCopy = *ss;
+}
+
+void LFOAndStepDisplay::stepSeqDirty()
+{
+    jassert(stepDirtyCount == 1);
+    storage->getPatch().isDirty = true;
+    guiEditor->undoManager()->pushStepSequencer(scene, lfoid, undoStorageCopy);
+}
+
+void LFOAndStepDisplay::showStepRMB(const juce::MouseEvent &event)
+{
+    dragMode = NONE;
+
+    for (int i = 0; i < n_stepseqsteps; ++i)
+    {
+        if (steprect[i].contains(event.position))
+        {
+            showStepRMB(i);
+        }
+    }
+}
+
+void LFOAndStepDisplay::showStepRMB(int i)
+{
+    auto contextMenu = juce::PopupMenu();
+
+    std::string olname = "Step Sequencer";
+    std::string helpname = "step-sequencer";
+
+    auto msurl = storage ? SurgeGUIEditor::helpURLForSpecial(storage, helpname) : std::string();
+    auto hurl = SurgeGUIEditor::fullyResolvedHelpURL(msurl);
+
+    auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(olname, hurl);
+    hmen->setSkin(skin, associatedBitmapStore);
+    auto hment = hmen->getTitle();
+
+    contextMenu.addCustomItem(-1, std::move(hmen), nullptr, hment);
+
+    contextMenu.addSeparator();
+
+    const int precision = Surge::Storage::getValueDisplayPrecision(storage);
+
+    auto msg = fmt::format("Edit Step {} Value: {:.{}f} %", i + 1, ss->steps[i] * 100.f, precision);
+
+    contextMenu.addItem(Surge::GUI::toOSCase(msg), true, false, [this, i]() { showStepTypein(i); });
+
+    contextMenu.showMenuAsync(guiEditor->popupMenuOptions());
+}
+
+void LFOAndStepDisplay::showStepTypein(int i)
+{
+    const bool isDetailed = Surge::Storage::getValueDisplayIsHighPrecision(storage);
+    const int precision = Surge::Storage::getValueDisplayPrecision(storage);
+
+    auto handleTypein = [this, i](const std::string &s) {
+        auto divPos = s.find('/');
+        float v = 0.f;
+
+        if (divPos != std::string::npos)
+        {
+            auto n = s.substr(0, divPos);
+            auto d = s.substr(divPos + 1);
+            auto nv = std::atof(n.c_str());
+            auto dv = std::atof(d.c_str());
+
+            if (dv == 0)
+            {
+                return false;
+            }
+
+            v = (nv / dv) * 100.f;
+        }
+        else
+        {
+            v = std::atof(s.c_str());
+        }
+
+        ss->steps[i] = std::clamp(v * 0.01f, -1.f, 1.f);
+
+        repaint();
+
+        return true;
+    };
+
+    if (!stepEditor)
+    {
+        stepEditor = std::make_unique<Surge::Overlays::TypeinLambdaEditor>(handleTypein);
+        getParentComponent()->addChildComponent(*stepEditor);
+    }
+
+    stepEditor->callback = handleTypein;
+    stepEditor->setMainLabel(fmt::format("Edit Step {} Value", std::to_string(i + 1)));
+    stepEditor->setValueLabels(fmt::format("current: {:.{}f} %", ss->steps[i] * 100.f, precision),
+                               "");
+    stepEditor->setSkin(skin, associatedBitmapStore);
+    stepEditor->setEditableText(fmt::format("{:.{}f} %", ss->steps[i] * 100.f, precision));
+    stepEditor->setReturnFocusTarget(stepSliderOverlays[i].get());
+
+    auto topOfControl = getY();
+    auto pb = getBounds();
+    auto cx = steprect[i].getCentreX() + getX();
+
+    auto r = stepEditor->getRequiredSize();
+    cx -= r.getWidth() / 2;
+    r = r.withBottomY(topOfControl).withX(cx);
+    stepEditor->setBounds(r);
+
+    stepEditor->setVisible(true);
+    stepEditor->grabFocus();
 }
 
 } // namespace Widgets

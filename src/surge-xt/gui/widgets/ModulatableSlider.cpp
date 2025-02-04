@@ -1,17 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+
+#include <iostream>
+#include <fmt/core.h>
 
 #include "ModulatableSlider.h"
 #include "SurgeGUIEditor.h"
@@ -30,7 +40,10 @@ ModulatableSlider::MoveRateState ModulatableSlider::sliderMoveRateState =
     ModulatableSlider::MoveRateState::kUnInitialized;
 ModulatableSlider::TouchscreenMode ModulatableSlider::touchscreenMode =
     ModulatableSlider::TouchscreenMode::kUnassigned;
-ModulatableSlider::ModulatableSlider() { setRepaintsOnMouseActivity(true); }
+ModulatableSlider::ModulatableSlider() : juce::Component(), WidgetBaseMixin<ModulatableSlider>(this)
+{
+    setRepaintsOnMouseActivity(true);
+}
 
 ModulatableSlider::~ModulatableSlider() {}
 
@@ -300,8 +313,18 @@ void ModulatableSlider::onSkinChanged()
             skin->hoverImageIdForResource(IDB_SLIDER_HORIZ_HANDLE, GUI::Skin::HOVER));
         pTempoSyncHandle =
             associatedBitmapStore->getImageByStringID("TEMPOSYNC_HORIZONTAL_OVERLAY");
+        if (!pTempoSyncHandle && skin->useInMemorySkin)
+        {
+            pTempoSyncHandle = associatedBitmapStore->getImageByStringID(
+                skin->hoverImageIdForResource(IDB_SLIDER_HORIZ_HANDLE, GUI::Skin::TEMPOSYNC));
+        }
         pTempoSyncHoverHandle =
             associatedBitmapStore->getImageByStringID("TEMPOSYNC_HORIZONTAL_HOVER_OVERLAY");
+        if (!pTempoSyncHoverHandle && skin->useInMemorySkin)
+        {
+            pTempoSyncHoverHandle = associatedBitmapStore->getImageByStringID(
+                skin->hoverImageIdForResource(IDB_SLIDER_HORIZ_HANDLE, GUI::Skin::HOVER_TEMPOSYNC));
+        }
     }
     else
     {
@@ -311,8 +334,19 @@ void ModulatableSlider::onSkinChanged()
             skin->hoverImageIdForResource(IDB_SLIDER_VERT_HANDLE, GUI::Skin::HOVER));
 
         pTempoSyncHandle = associatedBitmapStore->getImageByStringID("TEMPOSYNC_VERTICAL_OVERLAY");
+        if (!pTempoSyncHandle && skin->useInMemorySkin)
+        {
+            pTempoSyncHandle = associatedBitmapStore->getImageByStringID(
+                skin->hoverImageIdForResource(IDB_SLIDER_VERT_HANDLE, GUI::Skin::TEMPOSYNC));
+        }
+
         pTempoSyncHoverHandle =
             associatedBitmapStore->getImageByStringID("TEMPOSYNC_VERTICAL_HOVER_OVERLAY");
+        if (!pTempoSyncHoverHandle && skin->useInMemorySkin)
+        {
+            pTempoSyncHoverHandle = associatedBitmapStore->getImageByStringID(
+                skin->hoverImageIdForResource(IDB_SLIDER_VERT_HANDLE, GUI::Skin::HOVER_TEMPOSYNC));
+        }
     }
 
     if (skinControl.get())
@@ -370,6 +404,9 @@ void ModulatableSlider::mouseExit(const juce::MouseEvent &event) { endHover(); }
 
 void ModulatableSlider::endHover()
 {
+    if (stuckHover)
+        return;
+
     enqueueFutureInfowindow(SurgeGUIEditor::InfoQAction::LEAVE);
     isHovered = false;
     auto sge = firstListenerOfType<SurgeGUIEditor>();
@@ -406,9 +443,8 @@ void ModulatableSlider::mouseDrag(const juce::MouseEvent &event)
         {
             juce::Desktop::getInstance().getMainMouseSource().enableUnboundedMouseMovement(true);
         }
-
-        notifyBeginEdit();
     }
+
     editTypeWas = DRAG;
     updateLocationState();
 
@@ -459,6 +495,7 @@ void ModulatableSlider::mouseDrag(const juce::MouseEvent &event)
 
 void ModulatableSlider::mouseDown(const juce::MouseEvent &event)
 {
+    initiatedChange = false;
     enqueueFutureInfowindow(SurgeGUIEditor::InfoQAction::CANCEL);
     mouseDownFloatPosition = event.position;
 
@@ -479,6 +516,8 @@ void ModulatableSlider::mouseDown(const juce::MouseEvent &event)
     modValueOnMouseDown = modValue;
     lastDistance = 0.f;
     editTypeWas = NOEDIT;
+    initiatedChange = true;
+    notifyBeginEdit();
     showInfowindow(isEditingModulation);
 }
 
@@ -511,7 +550,24 @@ void ModulatableSlider::mouseUp(const juce::MouseEvent &event)
         if (editTypeWas == DRAG)
         {
             updateLocationState();
-            auto p = juce::Point<float>(handleCX, handleCY);
+
+            /*
+             * The center calculation is a bit off for mouse restore in horizontal
+             * mode. We could fix it and change all the meaning of the items but
+             * its much easier just to bodge in an offset here for now.
+             */
+            auto ptY = handleCY;
+            auto ptX = handleCX;
+            if (orientation == ParamConfig::kHorizontal)
+            {
+                ptY += handleSize.getHeight() / 2;
+            }
+            else
+            {
+                // Idiosyncratically only the horizontal calculation is wrong
+                // ptX += handleSize.getWidth() / 2;
+            }
+            auto p = juce::Point<float>(ptX, ptY);
             if (isEditingModulation)
                 p = juce::Point<float>(handleMX, handleMY);
             p = localPointToGlobal(p);
@@ -521,6 +577,9 @@ void ModulatableSlider::mouseUp(const juce::MouseEvent &event)
 
     if (editTypeWas != DRAG)
     {
+        if (initiatedChange)
+            notifyEndEdit();
+        initiatedChange = false;
         editTypeWas = NOEDIT;
         return;
     }
@@ -561,6 +620,9 @@ void ModulatableSlider::mouseDoubleClick(const juce::MouseEvent &event)
 void ModulatableSlider::mouseWheelMove(const juce::MouseEvent &event,
                                        const juce::MouseWheelDetails &wheel)
 {
+    if (editTypeWas == DRAG)
+        return;
+
     /*
      * If I choose based on horiz/vert it only works on trackpads, so just add
      */
@@ -640,10 +702,21 @@ struct ModulatableSliderAH : public juce::AccessibilityHandler
         }
         virtual juce::String getCurrentValueAsString() const override
         {
+            if (slider->customToAccessibleString)
+            {
+                return slider->customToAccessibleString();
+            }
             auto sge = slider->firstListenerOfType<SurgeGUIEditor>();
             if (sge)
             {
-                return sge->getDisplayForTag(slider->getTag());
+                if (slider->isEditingModulation)
+                {
+                    return sge->getAccessibleModulationVoiceover(slider->getTag());
+                }
+                else
+                {
+                    return sge->getDisplayForTag(slider->getTag());
+                }
             }
             return std::to_string(slider->getValue());
         }
@@ -675,12 +748,12 @@ struct ModulatableSliderAH : public juce::AccessibilityHandler
     };
 
     explicit ModulatableSliderAH(ModulatableSlider *s)
-        : slider(s), juce::AccessibilityHandler(
-                         *s, juce::AccessibilityRole::slider,
-                         juce::AccessibilityActions().addAction(
-                             juce::AccessibilityActionType::showMenu,
-                             [this]() { this->showMenu(); }),
-                         AccessibilityHandler::Interfaces{std::make_unique<MSValue>(s)})
+        : slider(s),
+          juce::AccessibilityHandler(
+              *s, juce::AccessibilityRole::slider,
+              juce::AccessibilityActions().addAction(juce::AccessibilityActionType::showMenu,
+                                                     [this]() { this->showMenu(); }),
+              AccessibilityHandler::Interfaces{std::make_unique<MSValue>(s)})
     {
     }
     void resetToDefault()
@@ -718,6 +791,12 @@ bool ModulatableSlider::keyPressed(const juce::KeyPress &key)
         return true;
     }
 
+    if (action == Return)
+    {
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+        if (sge && sge->promptForUserValueEntry(this))
+            return true;
+    }
     if (action == ToDefault)
     {
         notifyControlModifierDoubleClicked(juce::ModifierKeys());
@@ -726,7 +805,7 @@ bool ModulatableSlider::keyPressed(const juce::KeyPress &key)
         return true;
     }
 
-    float dv{0.05};
+    float dv = 1.0 / range;
     switch (action)
     {
     case Increase:
@@ -751,12 +830,41 @@ bool ModulatableSlider::keyPressed(const juce::KeyPress &key)
         dv *= 0.1;
         break;
     case Quantized:
-        // the value set handler handles this, oddly
+    {
+        /* the value set handler handles this, oddly. But we
+         * can fake it. This code should all go in XT2 of course.
+         * I apologize for this code but it adds a super useful
+         * accessibility function without rewriting the whole shebang.
+         * This basically does a linear search across the parameter bind
+         * to find the next step.
+         */
+        if (parameterType != ct_none)
+        {
+            Parameter pp;
+            pp.ctrltype = parameterType;
+            pp.valtype = vt_float;
+            pp.set_type(parameterType);
+            auto v = getValue();
+            auto sv = 0.005 * (action == Increase ? 1 : -1);
+            pp.set_value_f01(v, true);
+            auto fv = pp.val.f;
+            while (v <= 1.f && v >= 0.f)
+            {
+                v += sv;
+                pp.set_value_f01(v, true);
+                if (pp.val.f != fv)
+                    break;
+            }
+            value = v;
+            dv = 0;
+        }
         break;
+    }
     }
 
     if (isEditingModulation)
     {
+        // Value is PM1
         if (action == Increase || action == Decrease)
             modValue = limitpm1(modValue + dv);
         else if (action == ToMax)
@@ -766,12 +874,13 @@ bool ModulatableSlider::keyPressed(const juce::KeyPress &key)
     }
     else
     {
+        // Value is 01
         if (action == Increase || action == Decrease)
             value = limit01(value + dv);
         else if (action == ToMax)
             value = 1;
         else if (action == ToMin)
-            value = -1;
+            value = 0;
     }
 
     notifyBeginEdit();
@@ -780,6 +889,63 @@ bool ModulatableSlider::keyPressed(const juce::KeyPress &key)
     notifyEndEdit();
     repaint();
     return true;
+}
+
+void SelfUpdatingModulatableSlider::mouseEnter(const juce::MouseEvent &event)
+{
+    ModulatableSlider::mouseEnter(event);
+    if (!infoWindowInitialized && rootWindow)
+    {
+        infoWindowInitialized = true;
+        rootWindow->addChildComponent(infoWindow);
+        infoWindow.setOpaque(true);
+    }
+    if (infoWindowInitialized)
+    {
+        startTimer(500);
+    }
+}
+
+void SelfUpdatingModulatableSlider::mouseExit(const juce::MouseEvent &event)
+{
+    ModulatableSlider::mouseExit(event);
+    stopTimer();
+    if (infoWindowShowing)
+    {
+        infoWindowShowing = false;
+        infoWindow.setVisible(false);
+    }
+}
+
+void SelfUpdatingModulatableSlider::timerCallback()
+{
+    if (!infoWindowShowing)
+    {
+        infoWindowShowing = true;
+        stopTimer();
+        infoWindow.getParentComponent()->toFront(false);
+        infoWindow.toFront(false);
+        infoWindow.setBoundsToAccompany(
+            rootWindow->getLocalArea(this, getLocalBounds()),
+            rootWindow->getLocalBounds().transformedBy(rootWindow->getTransform().inverted()));
+        infoWindow.setVisible(true);
+    }
+}
+
+void SelfUpdatingModulatableSlider::onSkinChanged()
+{
+    ModulatableSlider::onSkinChanged();
+    infoWindow.setSkin(skin, associatedBitmapStore);
+}
+
+std::string SelfUpdatingModulatableSlider::createDisplayString() const
+{
+    float scaled = juce::jmap(getValue(), lowEnd, highEnd);
+    if (precision == 0)
+    {
+        return fmt::format("{}{}", static_cast<int>(scaled), unit);
+    }
+    return fmt::format("{:.{}f}{}", scaled, precision, unit);
 }
 
 } // namespace Widgets

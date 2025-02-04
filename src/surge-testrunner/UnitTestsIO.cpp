@@ -1,3 +1,24 @@
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -6,7 +27,7 @@
 #include "HeadlessUtils.h"
 #include "Player.h"
 
-#include "catch2/catch2.hpp"
+#include "catch2/catch_amalgamated.hpp"
 
 #include "UnitTestUtilities.h"
 #include <chrono>
@@ -18,7 +39,7 @@
 using namespace Surge::Test;
 using namespace std::chrono_literals;
 
-TEST_CASE("We can read a collection of wavetables", "[io]")
+TEST_CASE("We Can Read Wavetables", "[io]")
 {
     /*
     ** ToDo:
@@ -30,10 +51,12 @@ TEST_CASE("We can read a collection of wavetables", "[io]")
     auto surge = Surge::Headless::createSurge(44100);
     REQUIRE(surge.get());
 
+    std::string metadata;
+
     SECTION("Wavetable.wav")
     {
         auto wt = &(surge->storage.getPatch().scene[0].osc[0].wt);
-        surge->storage.load_wt_wav_portable("resources/test-data/wav/Wavetable.wav", wt);
+        surge->storage.load_wt_wav_portable("resources/test-data/wav/Wavetable.wav", wt, metadata);
         REQUIRE(wt->size == 2048);
         REQUIRE(wt->n_tables == 256);
         REQUIRE((wt->flags & wtf_is_sample) == 0);
@@ -42,7 +65,7 @@ TEST_CASE("We can read a collection of wavetables", "[io]")
     SECTION("05_BELL.WAV")
     {
         auto wt = &(surge->storage.getPatch().scene[0].osc[0].wt);
-        surge->storage.load_wt_wav_portable("resources/test-data/wav/05_BELL.WAV", wt);
+        surge->storage.load_wt_wav_portable("resources/test-data/wav/05_BELL.WAV", wt, metadata);
         REQUIRE(wt->size == 2048);
         REQUIRE(wt->n_tables == 33);
         REQUIRE((wt->flags & wtf_is_sample) == 0);
@@ -51,14 +74,14 @@ TEST_CASE("We can read a collection of wavetables", "[io]")
     SECTION("pluckalgo.wav")
     {
         auto wt = &(surge->storage.getPatch().scene[0].osc[0].wt);
-        surge->storage.load_wt_wav_portable("resources/test-data/wav/pluckalgo.wav", wt);
+        surge->storage.load_wt_wav_portable("resources/test-data/wav/pluckalgo.wav", wt, metadata);
         REQUIRE(wt->size == 2048);
         REQUIRE(wt->n_tables == 9);
         REQUIRE((wt->flags & wtf_is_sample) == 0);
     }
 }
 
-TEST_CASE("All .wt and .wav factory assets load", "[io]")
+TEST_CASE("All Factory Wavetables Are Loadable", "[io]")
 {
     auto surge = Surge::Headless::createSurge(44100, true);
     REQUIRE(surge.get());
@@ -74,7 +97,7 @@ TEST_CASE("All .wt and .wav factory assets load", "[io]")
     }
 }
 
-TEST_CASE("All Patches are Loadable", "[io]")
+TEST_CASE("All Patches Are Loadable", "[io]")
 {
     auto surge = Surge::Headless::createSurge(44100, true);
     REQUIRE(surge.get());
@@ -82,7 +105,8 @@ TEST_CASE("All Patches are Loadable", "[io]")
     for (auto p : surge->storage.patch_list)
     {
         INFO("Loading patch [" << p.name << "] from ["
-                               << surge->storage.patch_category[p.category].name << "]");
+                               << surge->storage.patch_category[p.category].name << " / isFactory="
+                               << surge->storage.patch_category[p.category].isFactory << "]");
         surge->loadPatch(i);
         ++i;
 
@@ -92,7 +116,7 @@ TEST_CASE("All Patches are Loadable", "[io]")
     }
 }
 
-TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
+TEST_CASE("DAW Streaming And Unstreaming", "[io][mpe][tun]")
 {
     // The basic plan of attack is, in a section, set up two surges,
     // stream onto data on the first and off of data on the second
@@ -202,7 +226,7 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
         REQUIRE(surgeSrc->storage.currentScale.rawText == surgeDest->storage.currentScale.rawText);
     }
 
-    SECTION("Save and Restore KBM")
+    SECTION("Save And Restore KBM")
     {
         auto surgeSrc = Surge::Headless::createSurge(44100);
         auto surgeDest = Surge::Headless::createSurge(44100);
@@ -234,7 +258,7 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
         REQUIRE(surgeDest->storage.isStandardMapping);
     }
 
-    SECTION("Save and Restore Param Midi Controls - Simple")
+    SECTION("Save And Restore Parameter MIDI Learn - Simple")
     {
         auto surgeSrc = Surge::Headless::createSurge(44100);
         auto surgeDest = Surge::Headless::createSurge(44100);
@@ -249,7 +273,7 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
         REQUIRE(surgeDest->storage.getPatch().param_ptr[118]->midictrl == 57);
     }
 
-    SECTION("Save and Restore Param Midi Controls - Empty")
+    SECTION("Save And Restore Parameter MIDI Learn - Empty")
     {
         auto surgeSrc = Surge::Headless::createSurge(44100);
         auto surgeDest = Surge::Headless::createSurge(44100);
@@ -263,7 +287,7 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
         }
     }
 
-    SECTION("Save and Restore Param Midi Controls - Multi")
+    SECTION("Save And Restore Parameter MIDI Learn - Multiple")
     {
         auto surgeSrc = Surge::Headless::createSurge(44100);
         auto surgeDest = Surge::Headless::createSurge(44100);
@@ -288,7 +312,7 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
         REQUIRE(surgeDest->storage.getPatch().param_ptr[172]->midictrl == 82);
     }
 
-    SECTION("Save and Restore Custom Controllers")
+    SECTION("Save And Restore MIDI Learn For Macros")
     {
         auto surgeSrc = Surge::Headless::createSurge(44100);
         auto surgeDest = Surge::Headless::createSurge(44100);
@@ -311,9 +335,9 @@ TEST_CASE("DAW Streaming and Unstreaming", "[io][mpe][tun]")
     }
 }
 
-TEST_CASE("Stream WaveTable Names", "[io]")
+TEST_CASE("Stream Wavetable Names", "[io]")
 {
-    SECTION("Name Restored for Old Patch")
+    SECTION("Name Restored For Old Patch")
     {
         auto surge = Surge::Headless::createSurge(44100);
         REQUIRE(surge);
@@ -322,13 +346,16 @@ TEST_CASE("Stream WaveTable Names", "[io]")
                 "(Patch Wavetable)");
     }
 
-    SECTION("Name Set when Loading Factory")
+    SECTION("Name Set When Loading a Factory Patch")
     {
         auto surge = Surge::Headless::createSurge(44100, true);
         REQUIRE(surge);
+        REQUIRE(surge->storage.wt_list.size() > 0);
 
         auto patch = &(surge->storage.getPatch());
         patch->scene[0].osc[0].type.val.i = ot_wavetable;
+        for (int i = 0; i < 2; ++i)
+            surge->process();
 
         for (int i = 0; i < 40; ++i)
         {
@@ -359,6 +386,8 @@ TEST_CASE("Stream WaveTable Names", "[io]")
         };
 
         auto surgeS = Surge::Headless::createSurge(44100, true);
+        REQUIRE(surgeS->storage.wt_list.size() > 0);
+
         auto surgeD = Surge::Headless::createSurge(44100, true);
         REQUIRE(surgeD);
 
@@ -378,6 +407,8 @@ TEST_CASE("Stream WaveTable Names", "[io]")
                     if (isWT)
                     {
                         patch->scene[s].osc[o].type.val.i = ot_wavetable;
+                        for (int i = 0; i < 2; ++i)
+                            surgeS->process();
                         int wti = rand() % surgeS->storage.wt_list.size();
                         surgeS->storage.load_wt(wti, &patch->scene[s].osc[o].wt,
                                                 &patch->scene[s].osc[o]);
@@ -387,7 +418,7 @@ TEST_CASE("Stream WaveTable Names", "[io]")
                         if (1.0 * rand() / RAND_MAX > 0.8)
                         {
                             auto sn = std::string("renamed blurg ") + std::to_string(rand());
-                            strncpy(patch->scene[s].osc[o].wavetable_display_name, sn.c_str(), 256);
+                            patch->scene[s].osc[o].wavetable_display_name = sn;
                             REQUIRE(std::string(patch->scene[s].osc[o].wavetable_display_name) ==
                                     sn);
                         }
@@ -416,17 +447,16 @@ TEST_CASE("Stream WaveTable Names", "[io]")
     }
 }
 
-TEST_CASE("Load Patches with Embedded KBM", "[io]")
+TEST_CASE("Load Patches With Embedded KBM", "[io]")
 {
-    std::vector<std::string> patches = {};
     SECTION("Check Restore")
     {
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideTuningOnPatchLoad] = {true,
-                                                                                           ""};
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideMappingOnPatchLoad] = {true,
-                                                                                            ""};
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideTuningOnPatchLoad, true);
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideMappingOnPatchLoad, true);
             surge->loadPatchByPath("resources/test-data/patches/HasKBM.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardScale);
             REQUIRE(!surge->storage.isStandardMapping);
@@ -434,10 +464,10 @@ TEST_CASE("Load Patches with Embedded KBM", "[io]")
 
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideTuningOnPatchLoad] = {true,
-                                                                                           ""};
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideMappingOnPatchLoad] = {true,
-                                                                                            ""};
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideTuningOnPatchLoad, true);
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideMappingOnPatchLoad, true);
             surge->loadPatchByPath("resources/test-data/patches/HasSCL.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardScale);
             REQUIRE(surge->storage.isStandardMapping);
@@ -445,10 +475,10 @@ TEST_CASE("Load Patches with Embedded KBM", "[io]")
 
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideTuningOnPatchLoad] = {true,
-                                                                                           ""};
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideMappingOnPatchLoad] = {true,
-                                                                                            ""};
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideTuningOnPatchLoad, true);
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideMappingOnPatchLoad, true);
             surge->loadPatchByPath("resources/test-data/patches/HasSCLandKBM.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardTuning);
             REQUIRE(!surge->storage.isStandardMapping);
@@ -456,10 +486,10 @@ TEST_CASE("Load Patches with Embedded KBM", "[io]")
 
         {
             auto surge = Surge::Headless::createSurge(44100);
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideTuningOnPatchLoad] = {true,
-                                                                                           ""};
-            surge->storage.userPrefOverrides[Surge::Storage::OverrideMappingOnPatchLoad] = {true,
-                                                                                            ""};
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideTuningOnPatchLoad, true);
+            surge->storage.userDefaultsProvider->addOverride(
+                Surge::Storage::OverrideMappingOnPatchLoad, true);
             surge->loadPatchByPath("resources/test-data/patches/HasSCL_165Vintage.fxp", -1, "Test");
             REQUIRE(!surge->storage.isStandardTuning);
             REQUIRE(surge->storage.isStandardMapping);
@@ -544,7 +574,7 @@ TEST_CASE("Patch Version Builder", "[io]")
             {
                 for (int fu = 0; fu < n_filterunits_per_scene; ++fu)
                 {
-                    INFO(path_to_string(ent) << " " << ft << " " << st << " " << s << " " << fu)
+                    INFO(path_to_string(ent) << " " << ft << " " << st << " " << s << " " << fu);
                     REQUIRE(surge->storage.getPatch().scene[s].filterunit[fu].type.val.i == ft);
                     REQUIRE(surge->storage.getPatch().scene[s].filterunit[fu].subtype.val.i == st);
                 }
@@ -652,7 +682,7 @@ TEST_CASE("Patch Version Builder", "[io]")
             {
                 for (int fu = 0; fu < n_filterunits_per_scene; ++fu)
                 {
-                    INFO(path_to_string(ent) << " " << ft << " " << st << " " << s << " " << fu)
+                    INFO(path_to_string(ent) << " " << ft << " " << st << " " << s << " " << fu);
                     REQUIRE(surge->storage.getPatch().scene[s].filterunit[fu].type.val.i == ft);
                     REQUIRE(surge->storage.getPatch().scene[s].filterunit[fu].subtype.val.i == st);
                 }
@@ -666,7 +696,7 @@ TEST_CASE("Patch Version Builder", "[io]")
     }
 }
 
-TEST_CASE("MonoVoicePriority Streams", "[io]")
+TEST_CASE("Mono Voice Priority Streams", "[io]")
 {
     auto fromto = [](std::shared_ptr<SurgeSynthesizer> src,
                      std::shared_ptr<SurgeSynthesizer> dest) {
@@ -675,7 +705,8 @@ TEST_CASE("MonoVoicePriority Streams", "[io]")
 
         dest->loadRaw(d, sz, false);
     };
-    SECTION("MVP Streams Properly")
+
+    SECTION("Mono Voice Priority Streams Properly")
     {
         int mvp = ALWAYS_LOWEST;
         for (int i = 0; i < 20; ++i)
@@ -698,5 +729,59 @@ TEST_CASE("MonoVoicePriority Streams", "[io]")
             REQUIRE(sdst->storage.getPatch().scene[1].monoVoicePriorityMode ==
                     (MonoVoicePriorityMode)r2);
         }
+    }
+}
+
+TEST_CASE("XML Direct", "[io]")
+{
+    // This is not a public API but we want to make sure it
+    // doesn't nuke surge with garbage
+    SECTION("Nothin")
+    {
+        auto surge = Surge::Headless::createSurge(44100);
+        std::string blank{};
+        surge->storage.getPatch().load_xml(blank.c_str(), blank.size(), false);
+    }
+
+    SECTION("Not XML")
+    {
+        auto surge = Surge::Headless::createSurge(44100);
+        std::string test{"This Is Not A Standard String, says Renee"};
+        surge->storage.getPatch().load_xml(test.c_str(), test.size(), false);
+    }
+
+    SECTION("Not XML")
+    {
+        auto surge = Surge::Headless::createSurge(44100);
+        std::string test{"This Is Not A Standard String, says Renee"};
+        surge->storage.getPatch().load_xml(test.c_str(), test.size(), false);
+    }
+
+    SECTION("Funny root node")
+    {
+        auto surge = Surge::Headless::createSurge(44100);
+        std::string test{"<funny/>"};
+        surge->storage.getPatch().load_xml(test.c_str(), test.size(), false);
+    }
+
+    SECTION("Invalid XML")
+    {
+        auto surge = Surge::Headless::createSurge(44100);
+        std::string test{"<funny></business>"};
+        surge->storage.getPatch().load_xml(test.c_str(), test.size(), false);
+    }
+
+    SECTION("Empty Patch")
+    {
+        auto surge = Surge::Headless::createSurge(44100);
+        std::string test{"<patch/>"};
+        surge->storage.getPatch().load_xml(test.c_str(), test.size(), false);
+    }
+
+    SECTION("Empty Parameters")
+    {
+        auto surge = Surge::Headless::createSurge(44100);
+        std::string test{"<patch><parameters/></patch>"};
+        surge->storage.getPatch().load_xml(test.c_str(), test.size(), false);
     }
 }

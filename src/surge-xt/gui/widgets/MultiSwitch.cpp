@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "MultiSwitch.h"
 #include "SurgeImage.h"
@@ -26,7 +33,7 @@ namespace Surge
 namespace Widgets
 {
 
-MultiSwitch::MultiSwitch()
+MultiSwitch::MultiSwitch() : juce::Component(), WidgetBaseMixin<MultiSwitch>(this)
 {
     setRepaintsOnMouseActivity(true);
     setAccessible(true);
@@ -40,14 +47,10 @@ void MultiSwitch::paint(juce::Graphics &g)
     auto y = -valueToOff(value) * heightOfOneImage;
     auto t = juce::AffineTransform().translated(0, y);
 
-    float activationOpacity = 1.0;
-
-    if (isDeactivated)
-    {
-        activationOpacity = 0.5;
-    }
+    float activationOpacity = isDeactivated ? 0.25 : 1.0;
 
     g.reduceClipRegion(getLocalBounds());
+
     switchD->draw(g, activationOpacity, t);
 
     if (isHovered)
@@ -124,6 +127,11 @@ juce::Point<float> MultiSwitch::valueToCoordinate(float val) const
 
 void MultiSwitch::mouseDown(const juce::MouseEvent &event)
 {
+    if (middleClickable && event.mods.isMiddleButtonDown())
+    {
+        notifyControlModifierClicked(event.mods);
+    }
+
     if (forwardedMainFrameMouseDowns(event))
     {
         return;
@@ -146,11 +154,15 @@ void MultiSwitch::mouseDown(const juce::MouseEvent &event)
 
     if (draggable)
     {
-        juce::Timer::callAfterDelay(250, [this]() { this->setCursorToArrow(); });
+        juce::Timer::callAfterDelay(250, [that = juce::Component::SafePointer(this)]() {
+            if (that)
+                that->setCursorToArrow();
+        });
     }
 
+    mouseDownLongHold(event);
     setValue(coordinateToValue(event.x, event.y));
-    notifyValueChanged();
+    notifyValueChangedWithBeginEnd();
 
     if (isHovered)
     {
@@ -161,6 +173,8 @@ void MultiSwitch::mouseDown(const juce::MouseEvent &event)
 void MultiSwitch::mouseMove(const juce::MouseEvent &event)
 {
     int ohs = hoverSelection;
+
+    mouseMoveLongHold(event);
 
     hoverSelection = coordinateToSelection(event.x, event.y);
 
@@ -199,6 +213,8 @@ void MultiSwitch::mouseDrag(const juce::MouseEvent &event)
         return;
     }
 
+    mouseDragLongHold(event);
+
     if (draggable)
     {
         if (!everDragged)
@@ -227,6 +243,7 @@ void MultiSwitch::mouseDrag(const juce::MouseEvent &event)
 
 void MultiSwitch::mouseUp(const juce::MouseEvent &event)
 {
+    mouseUpLongHold(event);
     isMouseDown = false;
     setMouseCursor(juce::MouseCursor::NormalCursor);
 
@@ -249,12 +266,17 @@ void MultiSwitch::startHover(const juce::Point<float> &p)
 
     isHovered = true;
     hoverSelection = coordinateToSelection(p.x, p.y);
+
+    repaint();
 }
 
 void MultiSwitch::mouseExit(const juce::MouseEvent &event) { endHover(); }
 
 void MultiSwitch::endHover()
 {
+    if (stuckHover)
+        return;
+
     isHovered = false;
     repaint();
 }
@@ -262,14 +284,14 @@ void MultiSwitch::endHover()
 void MultiSwitch::mouseWheelMove(const juce::MouseEvent &event,
                                  const juce::MouseWheelDetails &wheel)
 {
-    if (!draggable)
+    if (!mousewheelable)
     {
         return;
     }
 
     int dir = wheelHelper.accumulate(wheel);
 
-    // Veritcally aligned switches have higher values at the bottom
+    // Vertically aligned switches have higher values at the bottom
     if (rows > 1)
     {
         dir = -dir;
@@ -297,7 +319,10 @@ bool MultiSwitch::keyPressed(const juce::KeyPress &key)
         return true;
     }
 
-    if (action != Increase && action != Decrease)
+    bool doit =
+        action != Increase || action != Decrease || (rows * columns == 1 && action == Return);
+
+    if (!doit)
         return false;
 
     int dir = 1;
@@ -308,7 +333,16 @@ bool MultiSwitch::keyPressed(const juce::KeyPress &key)
 
     auto iv = limit_range(getIntegerValue() + dir, 0, rows * columns - 1);
 
-    setValue(1.f * iv / (rows * columns - 1));
+    if (rows * columns == 1)
+    {
+        setValue(0);
+    }
+    else
+    {
+        _DBGCOUT << "Setting integer value to " << iv << " " << 1.f * iv / (rows * columns - 1)
+                 << std::endl;
+        setValue(1.f * iv / (rows * columns - 1));
+    }
     notifyBeginEdit();
     notifyValueChanged();
     notifyEndEdit();
@@ -317,9 +351,9 @@ bool MultiSwitch::keyPressed(const juce::KeyPress &key)
     return true;
 }
 
-struct MultiSwitchRadioButton : public juce::Component
+template <juce::AccessibilityRole ROLE> struct MultiSwitchAccOverlayButton : public juce::Component
 {
-    MultiSwitchRadioButton(MultiSwitch *s, float value, int ival, const std::string &label)
+    MultiSwitchAccOverlayButton(MultiSwitch *s, float value, int ival, const std::string &label)
         : mswitch(s), val(value), ival(ival)
     {
         setDescription(label);
@@ -335,14 +369,14 @@ struct MultiSwitchRadioButton : public juce::Component
 
     struct RBAH : public juce::AccessibilityHandler
     {
-        explicit RBAH(MultiSwitchRadioButton *b, MultiSwitch *s)
-            : button(b), mswitch(s), juce::AccessibilityHandler(
-                                         *b, juce::AccessibilityRole::radioButton,
-                                         juce::AccessibilityActions()
-                                             .addAction(juce::AccessibilityActionType::press,
-                                                        [this]() { this->press(); })
-                                             .addAction(juce::AccessibilityActionType::showMenu,
-                                                        [this]() { this->showMenu(); }))
+        explicit RBAH(MultiSwitchAccOverlayButton *b, MultiSwitch *s)
+            : button(b), mswitch(s),
+              juce::AccessibilityHandler(
+                  *b, ROLE,
+                  juce::AccessibilityActions()
+                      .addAction(juce::AccessibilityActionType::press, [this]() { this->press(); })
+                      .addAction(juce::AccessibilityActionType::showMenu,
+                                 [this]() { this->showMenu(); }))
         {
         }
         void press()
@@ -371,14 +405,14 @@ struct MultiSwitchRadioButton : public juce::Component
         }
 
         MultiSwitch *mswitch;
-        MultiSwitchRadioButton *button;
+        MultiSwitchAccOverlayButton *button;
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RBAH);
     };
     std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler()
     {
         return std::make_unique<RBAH>(this, mswitch);
     }
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MultiSwitchRadioButton);
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MultiSwitchAccOverlayButton);
 };
 
 void MultiSwitch::setupAccessibility()
@@ -415,11 +449,23 @@ void MultiSwitch::setupAccessibility()
         {
             float val = ((float)sel) / (rows * columns - 1);
             auto title = sge->getDisplayForTag(getTag(), true, val);
-            auto ac = std::make_unique<MultiSwitchRadioButton>(this, val, sel, title);
-
+            std::unique_ptr<juce::Component> ac;
+            if (isAlwaysAccessibleMomentary())
+            {
+                title = getTitle().toStdString() + " " + title;
+                ac = std::make_unique<MultiSwitchAccOverlayButton<juce::AccessibilityRole::button>>(
+                    this, val, sel, title);
+            }
+            else
+            {
+                ac = std::make_unique<
+                    MultiSwitchAccOverlayButton<juce::AccessibilityRole::radioButton>>(this, val,
+                                                                                       sel, title);
+            }
             sel++;
             ac->getProperties().set("ControlGroup", (int)(c * columns + rows));
             ac->setBounds(juce::Rectangle<int>(c * dc, r * dr, dc, dr));
+            ac->setAccessible(true);
             addAndMakeVisible(*ac);
             selectionComponents.push_back(std::move(ac));
         }
@@ -440,6 +486,9 @@ juce::Component *MultiSwitch::getCurrentAccessibleSelectionComponent()
 
 void MultiSwitch::updateAccessibleStateOnUserValueChange()
 {
+    if (isAlwaysAccessibleMomentary())
+        return;
+
     if (getIntegerValue() < 0 || getIntegerValue() >= selectionComponents.size())
     {
         return;
@@ -485,63 +534,49 @@ std::unique_ptr<juce::AccessibilityHandler> MultiSwitch::createAccessibilityHand
     }
 }
 
+void MultiSwitchSelfDraw::onSkinChanged()
+{
+    MultiSwitch::onSkinChanged();
+    font = skin->getFont(Fonts::Widgets::SelfDrawSwitchFont);
+}
+
 void MultiSwitchSelfDraw::paint(juce::Graphics &g)
 {
     namespace clr = Colors::JuceWidgets::TextMultiSwitch;
 
     auto uph = skin->getColor(clr::UnpressedHighlight);
     bool royalMode = false;
+    const bool isEn = isEnabled() && !isDeactivated;
+    const float alpha = isEn ? 1.f : 0.35f;
+
     if (uph.getAlpha() > 0)
     {
         royalMode = true;
     }
 
-    // these are the classic skin colors just for now
     auto b = getLocalBounds().toFloat().reduced(0.5, 0.5);
     auto corner = 2.f, cornerIn = 1.5f;
 
     if (royalMode)
     {
-        g.setColour(skin->getColor(clr::UnpressedHighlight));
+        g.setColour(skin->getColor(clr::UnpressedHighlight).withMultipliedAlpha(alpha));
         g.fillRoundedRectangle(b.toFloat(), corner);
-        g.setColour(skin->getColor(clr::Background));
+        g.setColour(skin->getColor(clr::Background).withMultipliedAlpha(alpha));
         g.fillRoundedRectangle(b.toFloat().reduced(0, 1), corner);
     }
     else
     {
-        g.setColour(skin->getColor(clr::Background));
+        g.setColour(skin->getColor(clr::Background).withMultipliedAlpha(alpha));
         g.fillRoundedRectangle(b.toFloat(), corner);
     }
-    g.setColour(skin->getColor(clr::Border));
+
+    g.setColour(skin->getColor(clr::Border).withMultipliedAlpha(alpha));
     g.drawRoundedRectangle(b.toFloat(), corner, 1);
 
     auto cw = 1.f * (getWidth() - 2) / columns;
     auto ch = 1.f * (getHeight() - 2) / rows;
 
     bool solo = rows * columns == 1;
-
-    // Draw the separators
-    g.setColour(skin->getColor(clr::Separator));
-
-    float yInsetMul = royalMode ? 0.f : 1.f;
-    if (rows == 1)
-    {
-        for (int c = 1; c < columns; ++c)
-        {
-            auto r = juce::Rectangle<float>(cw * c - 0.5 + 1, yInsetMul * 3, 1,
-                                            getHeight() - yInsetMul * 5);
-            g.fillRect(r);
-        }
-    }
-    else if (columns == 1)
-    {
-        for (int r = 1; r < rows; ++r)
-        {
-            auto q = juce::Rectangle<float>(yInsetMul * 4, ch * r - 0.5 + 1,
-                                            getWidth() - yInsetMul * 9, 1);
-            g.fillRect(q);
-        }
-    }
 
     int idx = 0;
 
@@ -551,14 +586,17 @@ void MultiSwitchSelfDraw::paint(juce::Graphics &g)
         {
             auto rc = juce::Rectangle<float>(c * cw + 1, r * ch + 1, cw, ch);
             auto fc = rc.reduced(1.5, 1.5);
+
             if (royalMode)
+            {
                 fc = rc;
+                cornerIn = 0.5;
+            }
 
-            auto isOn = idx == getIntegerValue() && !solo;
+            auto isOn = isCellOn(r, c);
             auto isHo = isHovered && hoverSelection == idx;
-            auto isEn = isEnabled();
 
-            auto fg = skin->getColor(clr::Text);
+            auto fg = isEn ? skin->getColor(clr::Text) : skin->getColor(clr::DeactivatedText);
 
             if (!isEn)
             {
@@ -569,8 +607,11 @@ void MultiSwitchSelfDraw::paint(juce::Graphics &g)
                 g.setColour(skin->getColor(clr::HoverOnFill));
                 g.fillRoundedRectangle(fc.toFloat(), cornerIn);
 
-                g.setColour(skin->getColor(clr::HoverOnBorder));
-                g.drawRoundedRectangle(fc.toFloat().reduced(0.5), cornerIn, 1);
+                if (!royalMode)
+                {
+                    g.setColour(skin->getColor(clr::HoverOnBorder));
+                    g.drawRoundedRectangle(fc.toFloat().reduced(0.5), cornerIn, 1);
+                }
 
                 fg = skin->getColor(clr::HoverOnText);
             }
@@ -585,24 +626,51 @@ void MultiSwitchSelfDraw::paint(juce::Graphics &g)
             {
                 if (solo)
                 {
-                    g.setColour(skin->getColor(clr::HoverOnFill));
+                    g.setColour(skin->getColor(clr::HoverFill));
                     g.fillRoundedRectangle(fc.toFloat(), cornerIn);
 
-                    fg = skin->getColor(clr::HoverOnText);
+                    fg = skin->getColor(royalMode ? clr::Text : clr::TextHover);
                 }
                 else
                 {
                     g.setColour(skin->getColor(clr::HoverFill));
                     g.fillRoundedRectangle(fc.toFloat(), cornerIn);
-                    fg = skin->getColor(clr::HoverText);
+
+                    fg = skin->getColor(clr::TextHover);
                 }
             }
 
             g.setColour(fg);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(8, juce::Font::bold));
+            g.setFont(font);
             g.drawText(labels[idx], rc, juce::Justification::centred);
 
             idx++;
+        }
+
+        // Draw the separators
+        g.setColour(skin->getColor(clr::Separator));
+
+        float sepThickness = royalMode ? 0.5f : 1.f;
+        float sepOffset = royalMode ? 0.75f : 0.5f;
+        float sepInsetMul = royalMode ? 0.f : 1.f;
+
+        if (rows == 1)
+        {
+            for (int c = 1; c < columns; ++c)
+            {
+                auto r = juce::Line<float>(cw * c + sepOffset, sepInsetMul * 2.5f,
+                                           cw * c + sepOffset, getHeight() - sepInsetMul * 2.5f);
+                g.drawLine(r, sepThickness);
+            }
+        }
+        else if (columns == 1)
+        {
+            for (int r = 1; r < rows; ++r)
+            {
+                auto q = juce::Line<float>(2.5f * sepInsetMul, ch * r + sepOffset,
+                                           getWidth() - sepInsetMul * 2.5f, ch * r + sepOffset);
+                g.drawLine(q, sepThickness);
+            }
         }
     }
 }

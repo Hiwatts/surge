@@ -1,17 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
+
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_gui_extra/juce_gui_extra.h>
 
 #include "SurgeJUCELookAndFeel.h"
 #include "RuntimeFont.h"
@@ -30,8 +40,6 @@ using namespace juce;
 void SurgeJUCELookAndFeel::onSkinChanged()
 {
     setColour(topWindowBorderId, skin->getColor(Colors::Dialog::Titlebar::Background));
-    setColour(tempoTypeinTextId, Colours::black);
-    setColour(tempoTypeinHighlightId, Colours::red);
 
     setColour(DocumentWindow::backgroundColourId, Colour(48, 48, 48));
     setColour(TextButton::buttonColourId, Colour(32, 32, 32));
@@ -48,9 +56,9 @@ void SurgeJUCELookAndFeel::onSkinChanged()
 
     int menuMode = 0;
 
-    if (storage)
+    if (hasStorage())
     {
-        menuMode = Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MenuLightness, 2);
+        menuMode = Surge::Storage::getUserDefaultValue(storage(), Surge::Storage::MenuLightness, 2);
     }
 
     if (menuMode == 1)
@@ -102,6 +110,13 @@ void SurgeJUCELookAndFeel::onSkinChanged()
     setColour(SurgeJUCELookAndFeel::SurgeColourIds::tempoTypeinTextId,
               skin->getColor(Colors::Dialog::Entry::Text));
 
+    setColour(SurgeJUCELookAndFeel::SurgeColourIds::wheelBgId,
+              skin->getColor(Colors::VirtualKeyboard::Wheel::Background));
+    setColour(SurgeJUCELookAndFeel::SurgeColourIds::wheelBorderId,
+              skin->getColor(Colors::VirtualKeyboard::Wheel::Border));
+    setColour(SurgeJUCELookAndFeel::SurgeColourIds::wheelValueId,
+              skin->getColor(Colors::VirtualKeyboard::Wheel::Value));
+
     setColour(MidiKeyboardComponent::textLabelColourId,
               skin->getColor(Colors::VirtualKeyboard::Text));
     setColour(MidiKeyboardComponent::shadowColourId,
@@ -116,10 +131,14 @@ void SurgeJUCELookAndFeel::onSkinChanged()
               skin->getColor(Colors::VirtualKeyboard::Key::MouseOver));
     setColour(MidiKeyboardComponent::keyDownOverlayColourId,
               skin->getColor(Colors::VirtualKeyboard::Key::Pressed));
-    setColour(MidiKeyboardComponent::upDownButtonArrowColourId,
+    setColour(MidiKeyboardComponent::upDownButtonBackgroundColourId,
               skin->getColor(Colors::VirtualKeyboard::OctaveJog::Background));
     setColour(MidiKeyboardComponent::upDownButtonArrowColourId,
               skin->getColor(Colors::VirtualKeyboard::OctaveJog::Arrow));
+
+    setColour(ToggleButton::textColourId, skin->getColor(Colors::Dialog::Label::Text));
+    setColour(ToggleButton::tickColourId, skin->getColor(Colors::Dialog::Checkbox::Tick));
+    setColour(ToggleButton::tickDisabledColourId, skin->getColor(Colors::Dialog::Checkbox::Border));
 }
 
 void SurgeJUCELookAndFeel::drawLabel(Graphics &graphics, Label &label)
@@ -130,7 +149,7 @@ void SurgeJUCELookAndFeel::drawLabel(Graphics &graphics, Label &label)
 int SurgeJUCELookAndFeel::getTabButtonBestWidth(TabBarButton &b, int d)
 {
     auto f = skin->getFont(Fonts::Widgets::TabButtonFont);
-    auto r = f.getStringWidth(b.getButtonText()) + 20;
+    auto r = SST_STRING_WIDTH_INT(f, b.getButtonText()) + 20;
     return r;
 }
 
@@ -205,8 +224,8 @@ void SurgeJUCELookAndFeel::drawDocumentWindowTitleBar(DocumentWindow &window, Gr
 
     String surgeLabel = "Surge XT";
     String surgeVersion = Surge::Build::FullVersionStr;
-    auto fontSurge = Surge::GUI::getFontManager()->getLatoAtSize(14, juce::Font::bold);
-    auto fontVersion = Surge::GUI::getFontManager()->getFiraMonoAtSize(14, juce::Font::bold);
+    auto fontSurge = skin->fontManager->getLatoAtSize(14, juce::Font::bold);
+    auto fontVersion = skin->fontManager->getFiraMonoAtSize(14, juce::Font::bold);
 
 #if BUILD_IS_DEBUG
     surgeVersion += " DEBUG";
@@ -222,27 +241,27 @@ void SurgeJUCELookAndFeel::drawDocumentWindowTitleBar(DocumentWindow &window, Gr
         fontVersion = fontSurge;
     }
 
-    auto sw = fontSurge.getStringWidth(surgeLabel);
-    auto vw = fontVersion.getStringWidth(surgeVersion);
+    auto sw = SST_STRING_WIDTH_INT(fontSurge, surgeLabel);
+    auto vw = SST_STRING_WIDTH_INT(fontVersion, surgeVersion);
 
-    auto ic = associatedBitmapStore->getImage(IDB_SURGE_ICON);
+    auto icon = associatedBitmapStore->getImage(IDB_SURGE_ICON);
 
     // Surge icon is 12 x 14 so draw that in the center
     auto titleCenter = w / 2;
     auto textMargin = Surge::Build::IsRelease ? 0 : 5;
     auto titleTextWidth = sw + vw + textMargin;
 
-    if (ic)
+    if (icon)
     {
-        ic->drawAt(g, titleCenter - (titleTextWidth / 2) - 14 - textMargin, h / 2 - 7, 1.0);
+        icon->drawAt(g, titleCenter - (titleTextWidth / 2) - 14 - textMargin, h / 2 - 7, 1.0);
     }
 
-    auto boxSurge = Rectangle<int>(titleCenter - (titleTextWidth / 2), 0, sw, h);
+    auto boxSurge = juce::Rectangle<int>(titleCenter - (titleTextWidth / 2), 0, sw, h);
     g.setFont(fontSurge);
     g.drawText(surgeLabel, boxSurge, Justification::centredLeft);
 
     auto boxVersion =
-        Rectangle<int>(titleCenter - (titleTextWidth / 2) + sw + textMargin, 0, vw, h);
+        juce::Rectangle<int>(titleCenter - (titleTextWidth / 2) + sw + textMargin, 0, vw, h);
     g.setFont(fontVersion);
     g.drawText(surgeVersion, boxVersion, Justification::centredLeft);
 }
@@ -268,11 +287,11 @@ class SurgeJUCELookAndFeel_DocumentWindowButton : public Button
         g.setColour(colour);
         auto &p = getToggleState() ? toggledShape : normalShape;
 
-        auto reducedRect =
-            Justification(Justification::centred)
-                .appliedToRectangle(Rectangle<int>(getHeight(), getHeight()), getLocalBounds())
-                .toFloat()
-                .reduced((float)getHeight() * 0.25f);
+        auto reducedRect = Justification(Justification::centred)
+                               .appliedToRectangle(juce::Rectangle<int>(getHeight(), getHeight()),
+                                                   getLocalBounds())
+                               .toFloat()
+                               .reduced((float)getHeight() * 0.25f);
 
         g.fillPath(p, p.getTransformToScaleToFit(reducedRect, true));
     }
@@ -308,7 +327,7 @@ Button *SurgeJUCELookAndFeel::createDocumentWindowButton(int buttonType)
                                                              shape, shape);
     }
 
-    if (buttonType == DocumentWindow::maximiseButton)
+    if (buttonType == DocumentWindow::maximiseButton) // HACK
     {
         shape.addLineSegment({0.0f, 0.0f, 1.0f, 0.0f}, crossThickness); // top
         shape.addRectangle(0.0f, 0.0f, 1.0f, 1.0f);
@@ -333,11 +352,18 @@ Button *SurgeJUCELookAndFeel::createDocumentWindowButton(int buttonType)
 
 juce::Font SurgeJUCELookAndFeel::getPopupMenuFont()
 {
-    return Surge::GUI::getFontManager()->getLatoAtSize(15);
+    return skin->fontManager->getLatoAtSize(15);
     // return juce::LookAndFeel_V4::getPopupMenuFont();
 }
+
+juce::Font SurgeJUCELookAndFeel::getPopupMenuBoldFont()
+{
+    // return juce::Font("Comic Sans MS", 15, juce::Font::plain);
+    return skin->fontManager->getLatoAtSize(15, juce::Font::bold);
+}
+
 // overridden here just to make the shortcut text same size as normal menu entry text
-void SurgeJUCELookAndFeel::drawPopupMenuItem(Graphics &g, const Rectangle<int> &area,
+void SurgeJUCELookAndFeel::drawPopupMenuItem(Graphics &g, const juce::Rectangle<int> &area,
                                              const bool isSeparator, const bool isActive,
                                              const bool isHighlighted, const bool isTicked,
                                              const bool hasSubMenu, const String &text,
@@ -419,6 +445,7 @@ void SurgeJUCELookAndFeel::drawPopupMenuItem(Graphics &g, const Rectangle<int> &
 
         if (shortcutKeyText.isNotEmpty())
         {
+            g.setFont(juce::LookAndFeel_V4::getPopupMenuFont().withHeight(13));
             g.drawText(shortcutKeyText, r, Justification::centredRight, true);
         }
     }
@@ -440,9 +467,9 @@ void SurgeJUCELookAndFeel::updateDarkIfNeeded()
 {
     int menuMode = 0;
 
-    if (storage)
+    if (hasStorage())
     {
-        menuMode = Surge::Storage::getUserDefaultValue(storage, Surge::Storage::MenuLightness, 2);
+        menuMode = Surge::Storage::getUserDefaultValue(storage(), Surge::Storage::MenuLightness, 2);
     }
 
     if (menuMode == 1)
@@ -453,4 +480,33 @@ void SurgeJUCELookAndFeel::updateDarkIfNeeded()
             onSkinChanged();
         }
     }
+}
+void SurgeJUCELookAndFeel::drawPopupMenuSectionHeaderWithOptions(Graphics &graphics,
+                                                                 const juce::Rectangle<int> &area,
+                                                                 const String &sectionName,
+                                                                 const PopupMenu::Options &options)
+{
+    LookAndFeel_V2::drawPopupMenuSectionHeaderWithOptions(graphics, area, sectionName, options);
+}
+
+void SurgeJUCELookAndFeel::drawToggleButton(Graphics &g, ToggleButton &button,
+                                            bool shouldDrawButtonAsHighlighted,
+                                            bool shouldDrawButtonAsDown)
+{
+    auto tickWidth = jmin(15.0f, (float)button.getHeight() * 0.75f) * 1.2f;
+
+    drawTickBox(g, button, 2.0f, ((float)button.getHeight() - tickWidth) * 0.5f, tickWidth,
+                tickWidth, button.getToggleState(), button.isEnabled(),
+                shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+
+    g.setColour(button.findColour(ToggleButton::textColourId));
+    g.setFont(skin->fontManager->getLatoAtSize(9));
+
+    if (!button.isEnabled())
+        g.setOpacity(0.5f);
+
+    g.drawFittedText(
+        button.getButtonText(),
+        button.getLocalBounds().withTrimmedLeft(roundToInt(tickWidth) + 10).withTrimmedRight(2),
+        Justification::centredLeft, 10);
 }

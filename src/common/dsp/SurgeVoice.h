@@ -1,19 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2020 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#pragma once
+#ifndef SURGE_SRC_COMMON_DSP_SURGEVOICE_H
+#define SURGE_SRC_COMMON_DSP_SURGEVOICE_H
 #include "SurgeStorage.h"
 #include "Oscillator.h"
 #include "SurgeVoiceState.h"
@@ -31,15 +39,18 @@ class alignas(16) SurgeVoice
     float output alignas(16)[2][BLOCK_SIZE_OS];
     lipol_ps osclevels alignas(16)[7];
     pdata localcopy alignas(16)[n_scene_params];
+    pdata localcopy2 alignas(16)[n_scene_params];
     float fmbuffer alignas(16)[BLOCK_SIZE_OS];
 
     // used for the 2>1<3 FM-mode (Needs the pointer earlier)
 
     SurgeVoice();
-    SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *scene, pdata *params, int key,
-               int velocity, int channel, int scene_id, float detune, MidiKeyState *keyState,
-               MidiChannelState *mainChannelState, MidiChannelState *voiceChannelState,
-               bool mpeEnabled, int64_t voiceOrder);
+    SurgeVoice(SurgeStorage *storage, SurgeSceneStorage *scene, pdata *params, pdata *paramsUnmod,
+               int key, int velocity, int channel, int scene_id, float detune,
+               MidiKeyState *keyState, MidiChannelState *mainChannelState,
+               MidiChannelState *voiceChannelState, bool mpeEnabled, int64_t voiceOrder,
+               int32_t host_note_id, int16_t originating_host_key, int16_t originating_host_channel,
+               float aegStart, float fegStart);
     ~SurgeVoice();
 
     void release();
@@ -55,6 +66,43 @@ class alignas(16) SurgeVoice
     SurgeVoiceState state;
     int age, age_release;
 
+    bool matchesChannelKeyId(int16_t channel, int16_t key, int32_t host_noteid);
+
+    /*
+     * Begin implementing host-provided identifiers for voices for polyphonic
+     * modulators, note expressions, and so on
+     */
+    int32_t host_note_id{-1};
+    int16_t originating_host_key{-1}, originating_host_channel{-1};
+
+    struct PolyphonicParamModulation
+    {
+        int32_t param_id{0};
+        double value{0};
+        // see the comments in the monophonic implementation
+        valtypes vt_type{vt_float};
+        int imin{0}, imax{1};
+    };
+    int32_t paramModulationCount{0};
+    static constexpr int maxPolyphonicParamModulations = 64;
+    std::array<PolyphonicParamModulation, maxPolyphonicParamModulations> polyphonicParamModulations;
+    // See comment in SurgeSynthesizer::applyParameterPolyphonicModulation for why this has 2 args
+    void applyPolyphonicParamModulation(Parameter *, double value, double underlyingMonoMod);
+
+    enum NoteExpressionType
+    {
+        VOLUME,   // maps to per voice volume in all voices
+                  // 0 < x < = 4, amp = 20 * log(x)
+        PAN,      // maps to per voice pan in all voices, 0..1 with 0.5 center
+        PITCH,    // maps to the tuning -120 to 120 in keys
+        TIMBRE,   // maps to the MPE Timbre parameter 0 .. 1
+        PRESSURE, // maps to "channel AT" in MPE mode and "poly AT" in non-MPE mode 0 .. 1
+        UNKNOWN
+    };
+    void applyNoteExpression(NoteExpressionType net, float value);
+    static constexpr int numNoteExpressionTypes = (int)UNKNOWN;
+    std::array<float, numNoteExpressionTypes> noteExpressions;
+
     /*
     ** Given a note0 and an oscillator this returns the appropriate note.
     ** This is a pretty easy calculation in non-absolute mode. Just add.
@@ -64,6 +112,11 @@ class alignas(16) SurgeVoice
     inline float noteShiftFromPitchParam(float note0 /* the key + octave */,
                                          int oscNum /* The osc for pitch diffs */)
     {
+        if (localcopy[scene->osc[oscNum].pitch.param_id_in_scene].f == 0)
+        {
+            return note0;
+        }
+
         if (scene->osc[oscNum].pitch.absolute)
         {
             // remember note_to_pitch is linear interpolation on storage->table_pitch from
@@ -133,8 +186,31 @@ class alignas(16) SurgeVoice
         }
     }
 
-    static float channelKeyEquvialent(float key, int channel, SurgeStorage *storage,
-                                      bool remapKeyForTuning = true);
+    void getAEGFEGLevel(float &aeg, float &feg)
+    {
+        aeg = ampEGSource.get_output(0);
+        feg = filterEGSource.get_output(0);
+    }
+
+    void restartAEGFEGAttack(float aeg, float feg)
+    {
+        ampEGSource.attackFrom(aeg);
+        filterEGSource.attackFrom(feg);
+    }
+
+    void resetVelocity(int midiVelocity)
+    {
+        state.velocity = midiVelocity;
+        state.fvel = midiVelocity / 127.0;
+        velocitySource.set_target(0, state.fvel);
+    }
+
+    void retriggerLFOEnvelopes();
+    void retriggerOSCWithIndependentAttacks();
+    void resetPortamentoFrom(int key, int channel);
+
+    static float channelKeyEquvialent(float key, int channel, bool isMpeEnabled,
+                                      SurgeStorage *storage, bool remapKeyForTuning = true);
 
   private:
     template <bool first> void calc_ctrldata(QuadFilterChainState *, int);
@@ -179,16 +255,16 @@ class alignas(16) SurgeVoice
         } FU[4];
         struct
         {
-            float R[n_waveshaper_registers];
+            float R[sst::waveshapers::n_waveshaper_registers];
         } WS[2];
     } FBP;
     sst::filters::FilterCoefficientMaker<SurgeStorage> CM[2];
 
     // data
     int lag_id[8], pitch_id, octave_id, volume_id, pan_id, width_id;
-    SurgeStorage *storage;
-    SurgeSceneStorage *scene, *origscene;
+    SurgeSceneStorage *scene;
     pdata *paramptr;
+    pdata *paramptrUnmod;
     int route[6];
 
     float octaveSize = 12.0f;
@@ -202,9 +278,11 @@ class alignas(16) SurgeVoice
 
   public: // this is public, but only for the regtests
     std::array<ModulationSource *, n_modsources> modsources;
+    SurgeStorage *storage;
 
-  private:
-    ModulationSource velocitySource, releaseVelocitySource;
+  public:
+    ControllerModulationSource velocitySource;
+    ModulationSource releaseVelocitySource;
     ModulationSource keytrackSource;
     ControllerModulationSource polyAftertouchSource;
     ControllerModulationSource monoAftertouchSource;
@@ -220,3 +298,10 @@ class alignas(16) SurgeVoice
     // MPE special cases
     bool mpeEnabled;
 };
+
+void all_ring_modes_block(float *__restrict src1_l, float *__restrict src2_l,
+                          float *__restrict src1_r, float *__restrict src2_r,
+                          float *__restrict dst_l, float *__restrict dst_r, bool is_wide, int mode,
+                          lipol_ps osclevels, unsigned int nquads);
+
+#endif // SURGE_SRC_COMMON_DSP_SURGEVOICE_H

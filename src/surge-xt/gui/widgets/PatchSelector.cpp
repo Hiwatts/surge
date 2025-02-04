@@ -1,19 +1,26 @@
-#include "PatchSelector.h"
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
+#include "PatchSelector.h"
 #include "PatchSelector.h"
 #include "SurgeStorage.h"
 #include "SurgeGUIUtils.h"
@@ -27,20 +34,34 @@
 #include "SurgeJUCEHelpers.h"
 #include "AccessibleHelpers.h"
 
+/*
+ * It is an arbitrary number that we set as an ID for patch menu items.
+ * It is not necessarily to be unique among all menu items, only among a sub menu, so it can
+ * be a constant.
+ */
+static constexpr int ID_TO_PRESELECT_MENU_ITEMS = 636133;
+
 namespace Surge
 {
 namespace Widgets
 {
 
-struct PatchDBTypeAheadProvider : public TypeAheadDataProvider
+struct PatchDBTypeAheadProvider : public TypeAheadDataProvider,
+                                  public Surge::GUI::SkinConsumingComponent
 {
-    SurgeStorage *storage;
+    SurgeStorage *storage{nullptr};
+    PatchSelector *selector{nullptr};
+
+    PatchDBTypeAheadProvider(PatchSelector *s) : selector(s) {}
+
     std::vector<PatchStorage::PatchDB::patchRecord> lastSearchResult;
     std::vector<int> searchFor(const std::string &s) override
     {
+        std::cout << "search for " << s << "\n";
         lastSearchResult = storage->patchDB->queryFromQueryString(s);
         std::vector<int> res(lastSearchResult.size());
         std::iota(res.begin(), res.end(), 0);
+        selector->searchUpdated();
         return res;
     }
     std::string textBoxValueForIndex(int idx) override
@@ -50,8 +71,15 @@ struct PatchDBTypeAheadProvider : public TypeAheadDataProvider
         return "<<ERROR>>";
     }
 
-    int getRowHeight() override { return 23; }
-    int getDisplayedRows() override { return 12; }
+    std::string accessibleTextForIndex(int idx) override
+    {
+        if (idx >= 0 && idx < lastSearchResult.size())
+            return lastSearchResult[idx].name + " in " + lastSearchResult[idx].cat;
+        return "<<ERROR>>";
+    }
+
+    int getRowHeight() override { return 28; }
+    int getDisplayedRows() override { return 11; }
 
     juce::Colour rowBg{juce::Colours::white}, hlRowBg{juce::Colours::lightblue},
         rowText{juce::Colours::black}, hlRowText{juce::Colours::red},
@@ -61,76 +89,194 @@ struct PatchDBTypeAheadProvider : public TypeAheadDataProvider
     void paintDataItem(int searchIndex, juce::Graphics &g, int width, int height,
                        bool rowIsSelected) override
     {
+        bool isMouseOver = selector->typeAhead->isRowMouseOver(searchIndex);
+
         g.fillAll(rowBg);
         if (rowIsSelected)
         {
-            auto r = juce::Rectangle<int>(0, 0, width, height).reduced(2, 2);
+            auto r = juce::Rectangle<int>(0, 0, width, height - 0.5);
             g.setColour(hlRowBg);
             g.fillRect(r);
         }
+        else if (isMouseOver)
+        {
+            auto r = juce::Rectangle<int>(0, 0, width, height - 0.5);
+            g.setColour(hlRowBg.withAlpha(0.3f));
+            g.fillRect(r);
+        }
 
-        g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(12));
+        auto marginVertical = 3;
+
+        g.setFont(skin->fontManager->getLatoAtSize(11));
         if (searchIndex >= 0 && searchIndex < lastSearchResult.size())
         {
             auto pr = lastSearchResult[searchIndex];
-            auto r = juce::Rectangle<int>(4, 0, width - 8, height - 1);
+            auto r = juce::Rectangle<int>(4, marginVertical - 2, width - 8, height);
             if (rowIsSelected)
                 g.setColour(hlRowText);
             else
                 g.setColour(rowText);
-            g.drawText(pr.name, r, juce::Justification::centredTop);
+            g.drawText(pr.name, r, juce::Justification::topLeft);
 
             if (rowIsSelected)
-                g.setColour(hlRowSubText);
+                g.setColour(hlRowSubText.withAlpha(0.8f));
             else
-                g.setColour(rowSubText);
-            g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(8));
-            g.drawText(pr.cat, r, juce::Justification::bottomLeft);
-            g.drawText(pr.author, r, juce::Justification::bottomRight);
+                g.setColour(rowSubText.withAlpha(0.8f));
+            g.setFont(skin->fontManager->getLatoAtSize(8));
+
+            auto rLower = juce::Rectangle<int>(4, 0, width - 8, height - marginVertical);
+            r.translate(0, -marginVertical * 2);
+            g.drawText(pr.cat, rLower, juce::Justification::bottomLeft);
+            g.drawText(pr.author, rLower, juce::Justification::bottomRight);
         }
-        g.setColour(divider);
-        g.drawLine(4, height - 1, width - 4, height - 1, 1);
+        g.setColour(divider.withAlpha(0.8f));
+        g.drawLine(0, height - 0.5, width, height - 0.5, 0.5);
     }
 
-    void paintOverChildren(juce::Graphics &g, const juce::Rectangle<int> &bounds) override
+    void paintOverChildren(juce::Graphics &g, const juce::Rectangle<int> &bounds) override {}
+};
+
+struct PatchSelector::TB : juce::Component
+{
+    SurgeStorage *storage{nullptr};
+    TB(const std::string &s)
     {
-        auto q = bounds.reduced(2, 2);
-        auto res = lastSearchResult.size();
-        std::string txt;
+        setAccessible(true);
+        setWantsKeyboardFocus(true);
+        setTitle(s);
+        setDescription(s);
+    }
+    void paint(juce::Graphics &g) override
+    {
+        /* Useful for debugging
+        g.setColour(juce::Colours::blue);
+        g.drawRect(getLocalBounds(), 1);
+         */
+    }
 
-        if (res <= 0)
+    void mouseDown(const juce::MouseEvent &e) override
+    {
+        if (e.mods.isPopupMenu() && onMenu())
         {
-            txt = "No results";
+            return;
         }
-        else
-        {
-            txt = fmt::format("{:d} result{:s}", res, (res > 1 ? "s" : ""));
-        }
+        onPress();
+    }
 
-        g.setColour(rowText.withAlpha(0.666f));
-        g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(7, juce::Font::bold));
-        g.drawText(txt, q, juce::Justification::topLeft);
+    void mouseEnter(const juce::MouseEvent &e) override { onEnterExit(true); }
+
+    void mouseExit(const juce::MouseEvent &e) override { onEnterExit(false); }
+
+    bool keyPressed(const juce::KeyPress &e) override
+    {
+        auto [action, mod] = Surge::Widgets::accessibleEditAction(e, storage);
+        if (action == OpenMenu)
+        {
+            return onMenu();
+        }
+        if (action == Return)
+        {
+            return onPress();
+        }
+        return false;
+    }
+
+    std::function<void(bool)> onEnterExit = [](auto b) {};
+    std::function<bool()> onMenu = []() { return false; }, onPress = []() { return false; };
+
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override
+    {
+        return std::make_unique<juce::AccessibilityHandler>(
+            *this, juce::AccessibilityRole::button,
+            juce::AccessibilityActions().addAction(juce::AccessibilityActionType::press,
+                                                   [this]() {}));
     }
 };
 
-PatchSelector::PatchSelector()
+PatchSelector::PatchSelector() : juce::Component(), WidgetBaseMixin<PatchSelector>(this)
 {
-    patchDbProvider = std::make_unique<PatchDBTypeAheadProvider>();
+    patchDbProvider = std::make_unique<PatchDBTypeAheadProvider>(this);
     typeAhead = std::make_unique<Surge::Widgets::TypeAhead>("patch select", patchDbProvider.get());
     typeAhead->setVisible(false);
     typeAhead->addTypeAheadListener(this);
     typeAhead->setToElementZeroOnReturn = true;
+
     addChildComponent(*typeAhead);
+
+    searchButton = std::make_unique<TB>("Open Search DB");
+    searchButton->onEnterExit = [w = juce::Component::SafePointer(this)](bool b) {
+        if (w)
+        {
+            w->searchHover = b;
+            w->favoritesHover = false;
+            w->repaint();
+        }
+    };
+    searchButton->onPress = [w = juce::Component::SafePointer(this)]() {
+        if (w)
+        {
+            if (!w->storage->userDataPathValid)
+            {
+                auto sge = w->firstListenerOfType<SurgeGUIEditor>();
+                if (sge)
+                    sge->messageBox("Search is not available without a writable user dir",
+                                    "Search Not Available");
+            }
+            else
+            {
+                w->typeaheadButtonPressed();
+            }
+        }
+        return true;
+    };
+    addAndMakeVisible(*searchButton);
+
+    favoriteButton = std::make_unique<TB>("Favorites");
+    addAndMakeVisible(*favoriteButton);
+    favoriteButton->onEnterExit = [w = juce::Component::SafePointer(this)](bool b) {
+        if (w)
+        {
+            w->searchHover = false;
+            w->favoritesHover = b;
+            w->repaint();
+        }
+    };
+    favoriteButton->onPress = [w = juce::Component::SafePointer(this)]() {
+        if (w)
+        {
+            if (!w->storage->userDataPathValid)
+            {
+                auto sge = w->firstListenerOfType<SurgeGUIEditor>();
+                if (sge)
+                    sge->messageBox("Favorites are not available without a writable user dir",
+                                    "Favorites Not Available");
+            }
+            else
+            {
+                w->toggleFavoriteStatus();
+            }
+        }
+        return true;
+    };
+    favoriteButton->onMenu = [w = juce::Component::SafePointer(this)]() {
+        if (w)
+        {
+            w->showFavoritesMenu();
+        }
+        return true;
+    };
 
     setWantsKeyboardFocus(true);
 };
-PatchSelector::~PatchSelector() = default;
+PatchSelector::~PatchSelector() { typeAhead->removeTypeAheadListener(this); };
 
 void PatchSelector::setStorage(SurgeStorage *s)
 {
     storage = s;
     storage->patchDB->initialize();
     patchDbProvider->storage = s;
+    searchButton.get()->storage = s;
+    favoriteButton.get()->storage = s;
 }
 
 void PatchSelector::paint(juce::Graphics &g)
@@ -142,10 +288,13 @@ void PatchSelector::paint(juce::Graphics &g)
 
     if (skin->getVersion() >= 2)
     {
+        const int authMargin = 3;
+        const int maxAuthWidth = 180;
+
         cat = cat.translated(0, getHeight() * 0.5);
-        auth = auth.withTrimmedRight(3)
-                   .withWidth(150)
-                   .translated(getWidth() - 150 - 3, 0)
+        auth = auth.withTrimmedRight(authMargin)
+                   .withWidth(maxAuthWidth)
+                   .translated(getWidth() - maxAuthWidth - authMargin, 0)
                    .withTop(cat.getY())
                    .withHeight(cat.getHeight());
     }
@@ -157,13 +306,6 @@ void PatchSelector::paint(juce::Graphics &g)
         cat = cat.translated(0, 1);
         auth = auth.translated(0, -1);
     }
-
-#if DEBUG_PATCH_AREAS
-    g.setColour(juce::Colours::red);
-    g.drawRect(pbrowser);
-    g.drawRect(cat);
-    g.drawRect(auth);
-#endif
 
     // favorites rect
     {
@@ -179,24 +321,20 @@ void PatchSelector::paint(juce::Graphics &g)
         juce::Graphics::ScopedSaveState gs(g);
         g.reduceClipRegion(searchRect);
         auto img = associatedBitmapStore->getImage(IDB_SEARCH_BUTTON);
-        int yShift = 13 * ((searchHover ? 1 : 0));
+        int yShift = 13 * ((searchHover ? 1 : 0) + (isTypeaheadSearchOn ? 2 : 0));
         img->drawAt(g, searchRect.getX(), searchRect.getY() - yShift, 1.0);
     }
-
-    // patch browser text color
-    g.setColour(skin->getColor(Colors::PatchBrowser::Text));
 
     // patch name
     if (!isTypeaheadSearchOn)
     {
-        auto catsz = Surge::GUI::getFontManager()->displayFont.getStringWidthFloat(category);
-        auto authsz = Surge::GUI::getFontManager()->displayFont.getStringWidthFloat(author);
+        auto catsz = SST_STRING_WIDTH_FLOAT(skin->fontManager->displayFont, category);
+        auto authsz = SST_STRING_WIDTH_FLOAT(skin->fontManager->displayFont, author);
 
         auto catszwith =
-            Surge::GUI::getFontManager()->displayFont.getStringWidthFloat("Category: " + category);
-        auto authszwith =
-            Surge::GUI::getFontManager()->displayFont.getStringWidthFloat("By: " + author);
-        auto mainsz = Surge::GUI::getFontManager()->patchNameFont.getStringWidthFloat(pname);
+            SST_STRING_WIDTH_FLOAT(skin->fontManager->displayFont, "Category: " + category);
+        auto authszwith = SST_STRING_WIDTH_FLOAT(skin->fontManager->displayFont, "By: " + author);
+        auto mainsz = SST_STRING_WIDTH_FLOAT(skin->fontManager->patchNameFont, pname);
 
         bool useCatAndBy{false}, alignTop{false};
 
@@ -224,18 +362,30 @@ void PatchSelector::paint(juce::Graphics &g)
         auto pnRect =
             pbrowser.withLeft(searchRect.getRight()).withRight(favoritesRect.getX()).reduced(4, 0);
 
-        g.setFont(Surge::GUI::getFontManager()->patchNameFont);
+        g.setFont(skin->fontManager->patchNameFont);
+
         auto uname = pname;
+
         if (isDirty)
+        {
             uname += "*";
+        }
+
+        juce::Colour tc = skin->getColor(Colors::PatchBrowser::TextHover);
+
+        if (!browserHover || tc == juce::Colours::transparentBlack)
+        {
+            tc = skin->getColor(Colors::PatchBrowser::Text);
+        }
+
+        g.setColour(tc);
+
         g.drawFittedText(uname, pnRect,
                          alignTop ? juce::Justification::centredTop : juce::Justification::centred,
                          1, 0.1);
 
-        g.setColour(skin->getColor(Colors::PatchBrowser::Text));
-
         // category/author name
-        g.setFont(Surge::GUI::getFontManager()->displayFont);
+        g.setFont(skin->fontManager->displayFont);
 
         g.drawText((useCatAndBy ? "Category: " : "") + category, cat,
                    juce::Justification::centredLeft);
@@ -243,57 +393,105 @@ void PatchSelector::paint(juce::Graphics &g)
                    skin->getVersion() >= 2 ? juce::Justification::centredRight
                                            : juce::Justification::centredLeft);
     }
+
+    // search result text
+    if (typeAhead->lbox->isVisible())
+    {
+        auto res = patchDbProvider->lastSearchResult.size();
+        std::string txt;
+
+        if (res <= 0)
+        {
+            txt = "No results";
+        }
+        else
+        {
+            txt = fmt::format("{:d} result{:s}", res, (res > 1 ? "s" : ""));
+        }
+
+        auto tc = skin->getColor(Colors::PatchBrowser::Text);
+        g.setColour(tc);
+        g.setFont(skin->fontManager->displayFont);
+
+        auto rect = juce::Rectangle(20, -12, 70, 40);
+        g.drawText(txt, rect, juce::Justification::centredLeft);
+    }
 }
 
 void PatchSelector::resized()
 {
     auto fsize = 15;
+
     favoritesRect = getLocalBounds()
                         .withTrimmedBottom(getHeight() - fsize)
                         .withTrimmedLeft(getWidth() - fsize)
                         .reduced(1, 1)
                         .translated(-2, 1);
+    favoriteButton->setBounds(favoritesRect);
     searchRect = getLocalBounds()
                      .withTrimmedBottom(getHeight() - fsize)
                      .withWidth(fsize)
                      .reduced(1, 1)
                      .translated(2, 1);
+    searchButton->setBounds(searchRect);
 
-    auto tad = getLocalBounds().reduced(fsize + 4, 0).translated(0, -2);
+    auto tad = getLocalBounds().reduced(fsize, 0).translated(0, -2);
+
     typeAhead->setBounds(tad);
 }
 
 void PatchSelector::mouseEnter(const juce::MouseEvent &)
 {
+    browserHover = true;
+    repaint();
+
     if (tooltipCountdown < 0)
     {
-        tooltipCountdown = 5;
-        juce::Timer::callAfterDelay(100, [this]() { shouldTooltip(); });
+        tooltipCountdown = 3;
+        juce::Timer::callAfterDelay(100, Surge::GUI::makeSafeCallback<PatchSelector>(
+                                             this, [](auto *that) { that->shouldTooltip(); }));
     }
 }
 
 void PatchSelector::mouseMove(const juce::MouseEvent &e)
 {
     if (tooltipCountdown >= 0)
-        tooltipCountdown = 5;
+    {
+        tooltipCountdown = 3;
+    }
+
     // todo : apply mouse tolerance here
     if (tooltipShowing && e.position.getDistanceFrom(tooltipMouseLocation.toFloat()) > 1)
+    {
         toggleCommentTooltip(false);
+    }
     else
+    {
         tooltipMouseLocation = e.position;
+    }
 
     auto pfh = favoritesHover;
     favoritesHover = false;
+
     if (favoritesRect.contains(e.position.toInt()))
     {
+        browserHover = false;
         favoritesHover = true;
     }
 
     auto psh = searchHover;
     searchHover = false;
+
     if (searchRect.contains(e.position.toInt()))
     {
+        browserHover = false;
         searchHover = true;
+    }
+
+    if (!favoritesHover && !searchHover && !browserHover)
+    {
+        browserHover = true;
+        repaint();
     }
 
     if (favoritesHover != pfh || searchHover != psh)
@@ -301,6 +499,7 @@ void PatchSelector::mouseMove(const juce::MouseEvent &e)
         repaint();
     }
 }
+
 void PatchSelector::mouseDown(const juce::MouseEvent &e)
 {
     if (e.mods.isMiddleButtonDown())
@@ -313,51 +512,27 @@ void PatchSelector::mouseDown(const juce::MouseEvent &e)
     {
         if (e.mods.isPopupMenu())
         {
-            juce::PopupMenu menu;
-
-            tooltipCountdown = -1;
-            toggleCommentTooltip(false);
-
-            menu.addSectionHeader("FAVORITES");
-
-            auto haveFavs = optionallyAddFavorites(menu, false, false);
-
-            if (haveFavs)
-            {
-                menu.showMenuAsync(juce::PopupMenu::Options(),
-                                   Surge::GUI::makeEndHoverCallback(this));
-            }
-
+            showFavoritesMenu();
             return;
         }
         else
         {
-            isFavorite = !isFavorite;
-            auto sge = firstListenerOfType<SurgeGUIEditor>();
-
-            if (sge)
-            {
-                sge->setPatchAsFavorite(isFavorite);
-                repaint();
-            }
+            toggleFavoriteStatus();
         }
         return;
     }
 
     if (e.mods.isShiftDown() || searchRect.contains(e.position.toInt()))
     {
-        tooltipCountdown = -1;
-        toggleCommentTooltip(false);
-
-        toggleTypeAheadSearch(!isTypeaheadSearchOn);
+        typeaheadButtonPressed();
         return;
     }
 
-    // if RMB is down, only show the current category
-    bool single_category = e.mods.isRightButtonDown() || e.mods.isCommandDown();
     tooltipCountdown = -1;
     toggleCommentTooltip(false);
-    showClassicMenu(single_category);
+
+    stuckHover = true;
+    showClassicMenu(e.mods.isPopupMenu(), e.mods.isCommandDown());
 }
 
 void PatchSelector::shouldTooltip()
@@ -376,7 +551,8 @@ void PatchSelector::shouldTooltip()
     }
     else
     {
-        juce::Timer::callAfterDelay(200, [this]() { shouldTooltip(); });
+        juce::Timer::callAfterDelay(100, Surge::GUI::makeSafeCallback<PatchSelector>(
+                                             this, [](auto *that) { that->shouldTooltip(); }));
     }
 }
 
@@ -408,14 +584,27 @@ void PatchSelector::openPatchBrowser()
         sge->showOverlay(SurgeGUIEditor::PATCH_BROWSER);
     }
 }
-void PatchSelector::showClassicMenu(bool single_category)
+void PatchSelector::showClassicMenu(bool single_category, bool userOnly)
 {
     auto contextMenu = juce::PopupMenu();
     int main_e = 0;
     bool has_3rdparty = false;
     int last_category = current_category;
     auto patch_cat_size = storage->patch_category.size();
-    int tutorialCat = -1;
+    int tutorialCat = -1, midiPCCat = -1;
+
+    bool anyUser = false;
+    for (auto &c : storage->patch_category)
+    {
+        if (!c.isFactory && c.numberOfPatchesInCategoryAndChildren)
+        {
+            anyUser = true;
+        }
+    }
+    if (userOnly && !anyUser)
+    {
+        userOnly = false;
+    }
 
     if (single_category)
     {
@@ -457,7 +646,8 @@ void PatchSelector::showClassicMenu(bool single_category)
 
         std::transform(menuName.begin(), menuName.end(), menuName.begin(), ::toupper);
 
-        contextMenu.addSectionHeader("PATCHES (" + menuName + ")");
+        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+            contextMenu, "PATCHES (" + menuName + ")");
 
         populatePatchMenuForCategory(rightMouseCategory, contextMenu, single_category, main_e,
                                      false);
@@ -465,12 +655,13 @@ void PatchSelector::showClassicMenu(bool single_category)
     else
     {
         bool addedFavorites = false;
-        if (patch_cat_size && storage->firstThirdPartyCategory > 0)
+        if (!userOnly && patch_cat_size && storage->firstThirdPartyCategory > 0)
         {
-            contextMenu.addSectionHeader("FACTORY PATCHES");
+            Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                            "FACTORY PATCHES");
         }
 
-        for (int i = 0; i < patch_cat_size; i++)
+        for (int i = (userOnly ? storage->firstUserCategory : 0); i < patch_cat_size; i++)
         {
             if (i == storage->firstThirdPartyCategory || i == storage->firstUserCategory)
             {
@@ -480,18 +671,24 @@ void PatchSelector::showClassicMenu(bool single_category)
                 if (i == storage->firstThirdPartyCategory && storage->firstUserCategory != i)
                 {
                     txt = "THIRD PARTY PATCHES";
+                    contextMenu.addColumnBreak();
+                    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                    txt);
                 }
-                else
+                else if (anyUser)
                 {
                     favs = true;
                     txt = "USER PATCHES";
+                    contextMenu.addColumnBreak();
+                    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu,
+                                                                                    txt);
                 }
 
-                contextMenu.addColumnBreak();
-                contextMenu.addSectionHeader(txt);
                 if (favs && optionallyAddFavorites(contextMenu, false))
+                {
                     contextMenu.addSeparator();
-                addedFavorites = true;
+                    addedFavorites = true;
+                }
             }
 
             // remap index to the corresponding category in alphabetical order.
@@ -501,6 +698,11 @@ void PatchSelector::showClassicMenu(bool single_category)
                 storage->patch_category[c].name == "Tutorials")
             {
                 tutorialCat = c;
+            }
+            else if (!storage->patch_category[c].isFactory &&
+                     storage->patch_category[c].name == storage->midiProgramChangePatchesSubdir)
+            {
+                midiPCCat = c;
             }
             else
             {
@@ -514,32 +716,21 @@ void PatchSelector::showClassicMenu(bool single_category)
         }
     }
 
+    if (midiPCCat >= 0 &&
+        storage->patch_category[midiPCCat].numberOfPatchesInCategoryAndChildren > 0)
+    {
+        contextMenu.addSeparator();
+        populatePatchMenuForCategory(midiPCCat, contextMenu, single_category, main_e, true);
+    }
+
     contextMenu.addColumnBreak();
-    contextMenu.addSectionHeader("FUNCTIONS");
-
-    auto initAction = [this]() {
-        int i = 0;
-
-        bool lookingForFactory = (storage->initPatchCategoryType == "Factory");
-        for (auto p : storage->patch_list)
-        {
-            if (p.name == storage->initPatchName &&
-                storage->patch_category[p.category].name == storage->initPatchCategory &&
-                storage->patch_category[p.category].isFactory == lookingForFactory)
-            {
-                loadPatch(i);
-                break;
-            }
-
-            ++i;
-        }
-    };
+    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(contextMenu, "FUNCTIONS");
 
     auto sge = firstListenerOfType<SurgeGUIEditor>();
 
-    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Initialize Patch"), initAction);
+    contextMenu.addItem(Surge::GUI::toOSCase("Initialize Patch"), [this]() { loadInitPatch(); });
 
-    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Set Current Patch as Default"), [this]() {
+    contextMenu.addItem(Surge::GUI::toOSCase("Set Current Patch as Default"), [this]() {
         Surge::Storage::updateUserDefaultValue(storage, Surge::Storage::InitialPatchName,
                                                storage->patch_list[current_patch].name);
 
@@ -563,11 +754,11 @@ void PatchSelector::showClassicMenu(bool single_category)
     if (sge)
     {
         Surge::GUI::addMenuWithShortcut(
-            contextMenu, Surge::GUI::toOSCaseForMenu("Save Patch"),
+            contextMenu, Surge::GUI::toOSCase("Save Patch"),
             sge->showShortcutDescription("Ctrl + S", u8"\U00002318S"),
             [this, sge]() { sge->showOverlay(SurgeGUIEditor::SAVE_PATCH); });
 
-        contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Load Patch from File..."), [this, sge]() {
+        contextMenu.addItem(Surge::GUI::toOSCase("Load Patch from File..."), [this, sge]() {
             auto patchPath = storage->userPatchesPath;
 
             patchPath = Surge::Storage::getUserDefaultPath(storage, Surge::Storage::LastPatchPath,
@@ -579,6 +770,7 @@ void PatchSelector::showClassicMenu(bool single_category)
             sge->fileChooser->launchAsync(
                 juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                 [this, patchPath, sge](const juce::FileChooser &c) {
+                    sge->undoManager()->pushPatch();
                     auto ress = c.getResults();
                     if (ress.size() != 1)
                         return;
@@ -586,6 +778,7 @@ void PatchSelector::showClassicMenu(bool single_category)
                     auto res = c.getResult();
                     auto rString = res.getFullPathName().toStdString();
 
+                    std::cout << "queuePatchFileLoad: " << rString << std::endl;
                     sge->queuePatchFileLoad(rString);
 
                     auto dir =
@@ -603,7 +796,7 @@ void PatchSelector::showClassicMenu(bool single_category)
 
         if (isUser)
         {
-            contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Rename Patch"), [this, sge]() {
+            contextMenu.addItem(Surge::GUI::toOSCase("Rename Patch..."), [this, sge]() {
                 sge->showOverlay(
                     SurgeGUIEditor::SAVE_PATCH, [this](Overlays::OverlayComponent *co) {
                         auto psd = dynamic_cast<Surge::Overlays::PatchStoreDialog *>(co);
@@ -613,30 +806,47 @@ void PatchSelector::showClassicMenu(bool single_category)
                         psd->setEnclosingParentTitle("Rename Patch");
                         const auto priorPath = storage->patch_list[current_patch].path;
                         psd->onOK = [this, priorPath]() {
-                            fs::remove(priorPath);
-                            storage->refresh_patchlist();
-                            storage->initializePatchDb(true);
+                            /*
+                             * OK so the database doesn't like deleting files while it is indexing.
+                             * We should fix this (#6793) but for now put the delete action at the
+                             * end of the db processing thread. BUT that will run on the patchdb
+                             * thread so bounce it from here to there and then back here.
+                             */
+                            auto nextStep = [this, priorPath]() {
+                                auto doDelete = [this, priorPath]() {
+                                    fs::remove(priorPath);
+                                    storage->refresh_patchlist();
+                                    storage->initializePatchDb(true);
+                                };
+                                juce::MessageManager::getInstance()->callAsync(doDelete);
+                            };
+                            storage->patchDB->doAfterCurrentQueueDrained(nextStep);
                         };
                     });
             });
 
-            contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Delete Patch"), [this, initAction]() {
-                auto cb = juce::ModalCallbackFunction::create([this, initAction](int okcs) {
-                    if (okcs)
+            contextMenu.addItem(Surge::GUI::toOSCase("Delete Patch"), [this, sge]() {
+                auto onOk = [this]() {
+                    try
                     {
                         fs::remove(storage->patch_list[current_patch].path);
                         storage->refresh_patchlist();
                         storage->initializePatchDb(true);
-                        initAction();
                     }
-                });
+                    catch (const fs::filesystem_error &e)
+                    {
+                        std::ostringstream oss;
+                        oss << "Experienced filesystem error while deleting patch " << e.what();
+                        storage->reportError(oss.str(), "Filesystem Error");
+                    }
+                    isUser = false;
+                };
 
-                juce::AlertWindow::showOkCancelBox(
-                    juce::AlertWindow::NoIcon, "Delete Patch",
-                    std::string("Do you really want to delete\n") +
-                        storage->patch_list[current_patch].path.u8string() +
-                        "?\n\nThis cannot be undone!",
-                    "Yes", "No", nullptr, cb);
+                sge->alertOKCancel("Delete Patch",
+                                   std::string("Do you really want to delete\n") +
+                                       storage->patch_list[current_patch].path.u8string() +
+                                       "?\nThis cannot be undone!",
+                                   onOk);
             });
         }
 
@@ -644,27 +854,33 @@ void PatchSelector::showClassicMenu(bool single_category)
 
 #if INCLUDE_PATCH_BROWSER
         Surge::GUI::addMenuWithShortcut(
-            contextMenu, Surge::GUI::toOSCaseForMenu("Patch Database..."),
+            contextMenu, Surge::GUI::toOSCase("Patch Database..."),
             sge->showShortcutDescription("Alt + P", u8"\U00002325P"),
             [this, sge]() { sge->showOverlay(SurgeGUIEditor::PATCH_BROWSER); });
 #endif
     }
 
-    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Refresh Patch Browser"),
+    contextMenu.addItem(Surge::GUI::toOSCase("Refresh Patch Browser"),
                         [this]() { this->storage->refresh_patchlist(); });
 
     contextMenu.addSeparator();
 
-    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Open User Patches Folder..."),
+    if (current_patch >= 0 && current_patch < storage->patch_list.size() &&
+        storage->patch_list[current_patch].category >= storage->firstUserCategory)
+    {
+        Surge::GUI::addRevealFile(contextMenu, storage->patch_list[current_patch].path);
+    }
+
+    contextMenu.addItem(Surge::GUI::toOSCase("Open User Patches Folder..."),
                         [this]() { Surge::GUI::openFileOrFolder(this->storage->userPatchesPath); });
 
-    contextMenu.addItem(Surge::GUI::toOSCaseForMenu("Open Factory Patches Folder..."), [this]() {
+    contextMenu.addItem(Surge::GUI::toOSCase("Open Factory Patches Folder..."), [this]() {
         Surge::GUI::openFileOrFolder(this->storage->datapath / "patches_factory");
     });
 
-    contextMenu.addItem(
-        Surge::GUI::toOSCaseForMenu("Open Third Party Patches Folder..."),
-        [this]() { Surge::GUI::openFileOrFolder(this->storage->datapath / "patches_3rdparty"); });
+    contextMenu.addItem(Surge::GUI::toOSCase("Open Third Party Patches Folder..."), [this]() {
+        Surge::GUI::openFileOrFolder(this->storage->datapath / "patches_3rdparty");
+    });
 
     contextMenu.addSeparator();
 
@@ -688,18 +904,26 @@ void PatchSelector::showClassicMenu(bool single_category)
         auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("Patch Browser", lurl);
 
         hmen->setSkin(skin, associatedBitmapStore);
-        hmen->setCenterBold(false);
-        contextMenu.addCustomItem(-1, std::move(hmen));
+        hmen->setCentered(false);
+        auto hment = hmen->getTitle();
+        contextMenu.addCustomItem(-1, std::move(hmen), nullptr, hment);
     }
 
     auto o = juce::PopupMenu::Options();
 
     if (sge)
     {
-        o = sge->optionsForPosition(getBounds().getBottomLeft());
+        o = sge->popupMenuOptions(getBounds().getBottomLeft())
+                .withInitiallySelectedItem(ID_TO_PRESELECT_MENU_ITEMS);
     }
 
-    contextMenu.showMenuAsync(o);
+    contextMenu.showMenuAsync(o, [that = juce::Component::SafePointer(this)](int) {
+        if (that)
+        {
+            that->stuckHover = false;
+            that->endHover();
+        }
+    });
 }
 
 bool PatchSelector::optionallyAddFavorites(juce::PopupMenu &p, bool addColumnBreak,
@@ -729,7 +953,7 @@ bool PatchSelector::optionallyAddFavorites(juce::PopupMenu &p, bool addColumnBre
     if (addColumnBreak)
     {
         p.addColumnBreak();
-        p.addSectionHeader("FAVORITES");
+        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(p, "FAVORITES");
     }
 
     if (addToSubMenu)
@@ -742,6 +966,12 @@ bool PatchSelector::optionallyAddFavorites(juce::PopupMenu &p, bool addColumnBre
                             [this, f]() { this->loadPatch(f.first); });
         }
 
+        subMenu.addSeparator();
+        subMenu.addItem(Surge::GUI::toOSCase("Export favorites to..."),
+                        [this]() { exportFavorites(); });
+        subMenu.addItem(Surge::GUI::toOSCase("Load favorites from..."),
+                        [this]() { importFavorites(); });
+
         p.addSubMenu("Favorites", subMenu);
     }
     else
@@ -751,9 +981,129 @@ bool PatchSelector::optionallyAddFavorites(juce::PopupMenu &p, bool addColumnBre
             p.addItem(juce::CharPointer_UTF8(f.second.name.c_str()),
                       [this, f]() { this->loadPatch(f.first); });
         }
+        p.addSeparator();
+        p.addItem(Surge::GUI::toOSCase("Export favorites to..."), [this]() { exportFavorites(); });
+        p.addItem(Surge::GUI::toOSCase("Load favorites from..."), [this]() { importFavorites(); });
     }
 
     return true;
+}
+
+void PatchSelector::exportFavorites()
+{
+    auto favoritesCallback = [this](const juce::FileChooser &c) {
+        auto isSubDir = [](auto p, auto root) {
+            while (p != fs::path() && p != p.parent_path())
+            {
+                if (p == root)
+                {
+                    return true;
+                }
+                p = p.parent_path();
+            }
+            return false;
+        };
+
+        auto result = c.getResults();
+
+        if (result.isEmpty() || result.size() > 1)
+        {
+            return;
+        }
+
+        auto fsp = fs::path{result[0].getFullPathName().toStdString()};
+        fsp = fsp.replace_extension(".surgefav");
+
+        std::ofstream ofs(fsp);
+
+        for (auto p : storage->patch_list)
+        {
+            if (p.isFavorite)
+            {
+                auto q = p.path;
+                if (isSubDir(q, storage->datapath))
+                {
+                    q = q.lexically_relative(storage->datapath);
+                    ofs << "FACTORY:" << q.u8string() << std::endl;
+                }
+                else if (isSubDir(q, storage->userPatchesPath))
+                {
+                    q = q.lexically_relative(storage->userPatchesPath);
+                    ofs << "USER:" << q.u8string() << std::endl;
+                }
+            }
+        }
+        ofs.close();
+    };
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+    if (!sge)
+        return;
+    sge->fileChooser =
+        std::make_unique<juce::FileChooser>("Export Favorites", juce::File(), "*.surgefav");
+    sge->fileChooser->launchAsync(juce::FileBrowserComponent::saveMode |
+                                      juce::FileBrowserComponent::canSelectFiles |
+                                      juce::FileBrowserComponent::warnAboutOverwriting,
+                                  favoritesCallback);
+}
+
+void PatchSelector::importFavorites()
+{
+    auto importCallback = [this](const juce::FileChooser &c) {
+        auto result = c.getResults();
+
+        if (result.isEmpty() || result.size() > 1)
+        {
+            return;
+        }
+
+        auto fsp = fs::path{result[0].getFullPathName().toStdString()};
+        fsp = fsp.replace_extension(".surgefav");
+
+        std::ifstream ifs(fsp);
+
+        std::set<fs::path> imports;
+
+        for (std::string line; getline(ifs, line);)
+        {
+            if (line.find("FACTORY:") == 0)
+            {
+                auto q = storage->datapath / fs::path(line.substr(std::string("FACTORY:").size()));
+                imports.insert(q);
+            }
+            else if (line.find("USER:") == 0)
+            {
+                auto q =
+                    storage->userPatchesPath / fs::path(line.substr(std::string("USER:").size()));
+                imports.insert(q);
+            }
+        }
+
+        int i = 0;
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+        if (!sge)
+            return;
+        bool refresh = false;
+        for (auto p : storage->patch_list)
+        {
+            if (!p.isFavorite && imports.find(p.path) != imports.end())
+            {
+                sge->setSpecificPatchAsFavorite(i, true);
+                refresh = true;
+            }
+            i++;
+        }
+
+        if (refresh)
+            sge->queue_refresh = true;
+
+        ifs.close();
+    };
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+    if (!sge)
+        return;
+    sge->fileChooser =
+        std::make_unique<juce::FileChooser>("Import Favorites", juce::File(), "*.surgefav");
+    sge->fileChooser->launchAsync(juce::FileBrowserComponent::canSelectFiles, importCallback);
 }
 
 bool PatchSelector::populatePatchMenuForCategory(int c, juce::PopupMenu &contextMenu,
@@ -827,6 +1177,9 @@ bool PatchSelector::populatePatchMenuForCategory(int c, juce::PopupMenu &context
             auto item = juce::PopupMenu::Item(name).setEnabled(true).setTicked(thisCheck).setAction(
                 [this, p]() { this->loadPatch(p); });
 
+            if (thisCheck)
+                item.setID(ID_TO_PRESELECT_MENU_ITEMS);
+
             if (isFav && associatedBitmapStore)
             {
                 auto img = associatedBitmapStore->getImage(IDB_FAVORITE_MENU_ICON);
@@ -842,7 +1195,7 @@ bool PatchSelector::populatePatchMenuForCategory(int c, juce::PopupMenu &context
 
                 if (single_category)
                 {
-                    subMenu->addSectionHeader("");
+                    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(*subMenu, "");
                 }
             }
         }
@@ -880,16 +1233,20 @@ bool PatchSelector::populatePatchMenuForCategory(int c, juce::PopupMenu &context
 
         if (n_subc > 1)
         {
-            name = menuName.c_str() + (subc + 1);
+            name = fmt::format("{} {}", menuName, subc + 1);
         }
         else
         {
-            name = menuName.c_str();
+            name = menuName;
         }
 
         if (!single_category)
         {
-            contextMenu.addSubMenu(name, *subMenu, true, nullptr, amIChecked);
+            if (amIChecked)
+                contextMenu.addSubMenu(name, *subMenu, true, nullptr, amIChecked,
+                                       ID_TO_PRESELECT_MENU_ITEMS);
+            else
+                contextMenu.addSubMenu(name, *subMenu, true, nullptr, amIChecked);
         }
 
         main_e++;
@@ -902,8 +1259,31 @@ void PatchSelector::loadPatch(int id)
 {
     if (id >= 0)
     {
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+        if (sge)
+            sge->undoManager()->pushPatch();
+
         enqueue_sel_id = id;
         notifyValueChanged();
+    }
+}
+
+void PatchSelector::loadInitPatch()
+{
+    int i = 0;
+    bool lookingForFactory = (storage->initPatchCategoryType == "Factory");
+
+    for (auto p : storage->patch_list)
+    {
+        if (p.name == storage->initPatchName &&
+            storage->patch_category[p.category].name == storage->initPatchCategory &&
+            storage->patch_category[p.category].isFactory == lookingForFactory)
+        {
+            loadPatch(i);
+            break;
+        }
+
+        ++i;
     }
 }
 
@@ -921,7 +1301,31 @@ void PatchSelector::itemSelected(int providerIndex)
         sge->queuePatchFileLoad(sr.file);
     }
 }
-void PatchSelector::typeaheadCanceled() { toggleTypeAheadSearch(false); }
+
+void PatchSelector::itemFocused(int providerIndex)
+{
+#if WINDOWS
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+    if (!sge)
+        return;
+
+    auto sr = patchDbProvider->lastSearchResult[providerIndex];
+    auto doAcc = Surge::Storage::getUserDefaultValue(
+        storage, Surge::Storage::UseNarratorAnnouncementsForPatchTypeahead, true);
+    if (doAcc)
+    {
+        sge->enqueueAccessibleAnnouncement(sr.name + " in " + sr.cat);
+    }
+#endif
+}
+
+void PatchSelector::idle() { wasTypeaheadCanceledSinceLastIdle = false; }
+
+void PatchSelector::typeaheadCanceled()
+{
+    wasTypeaheadCanceledSinceLastIdle = true;
+    toggleTypeAheadSearch(false);
+}
 
 void PatchSelector::onSkinChanged()
 {
@@ -929,7 +1333,7 @@ void PatchSelector::onSkinChanged()
     typeAhead->setColour(juce::TextEditor::outlineColourId, transBlack);
     typeAhead->setColour(juce::TextEditor::backgroundColourId, transBlack);
     typeAhead->setColour(juce::TextEditor::focusedOutlineColourId, transBlack);
-    typeAhead->setFont(Surge::GUI::getFontManager()->patchNameFont);
+    typeAhead->setFont(skin->fontManager->patchNameFont);
     typeAhead->setIndents(4, (typeAhead->getHeight() - typeAhead->getTextHeight()) / 2);
 
     typeAhead->setColour(juce::TextEditor::textColourId,
@@ -953,6 +1357,8 @@ void PatchSelector::onSkinChanged()
     patchDbProvider->hlRowSubText =
         skin->getColor(Colors::PatchBrowser::TypeAheadList::HighlightSubText);
     patchDbProvider->divider = skin->getColor(Colors::PatchBrowser::TypeAheadList::Separator);
+
+    patchDbProvider->setSkin(skin, associatedBitmapStore);
 }
 
 void PatchSelector::toggleTypeAheadSearch(bool b)
@@ -962,21 +1368,35 @@ void PatchSelector::toggleTypeAheadSearch(bool b)
 
     if (isTypeaheadSearchOn)
     {
-        storage->initializePatchDb();
         bool enable = true;
         auto txt = pname;
+        if (!typeAhead->lastSearch.empty())
+            txt = typeAhead->lastSearch;
+
+        storage->initializePatchDb();
+
         if (storage->patchDB->numberOfJobsOutstanding() > 0)
         {
             enable = false;
-            txt = "Updating Patch Database: " +
+            txt = "Updating patch database: " +
                   std::to_string(storage->patchDB->numberOfJobsOutstanding()) + " items left";
         }
+
+        bool patchStickySearchbox = Surge::Storage::getUserDefaultValue(
+            storage, Surge::Storage::RetainPatchSearchboxAfterLoad, true);
+
+        typeAhead->dismissMode = patchStickySearchbox
+                                     ? TypeAhead::DISMISS_ON_CMD_RETURN_RETAIN_ON_RETURN
+                                     : TypeAhead::DISMISS_ON_RETURN_RETAIN_ON_CMD_RETURN;
+
         typeAhead->setJustification(juce::Justification::centred);
         typeAhead->setIndents(4, (typeAhead->getHeight() - typeAhead->getTextHeight()) / 2);
         typeAhead->setText(txt, juce::NotificationType::dontSendNotification);
 
         if (!typeAhead->isVisible() && sge)
+        {
             sge->vkbForward++;
+        }
 
         typeAhead->setVisible(true);
         typeAhead->setEnabled(enable);
@@ -986,7 +1406,14 @@ void PatchSelector::toggleTypeAheadSearch(bool b)
 
         if (!enable)
         {
-            juce::Timer::callAfterDelay(250, [this]() { this->enableTypeAheadIfReady(); });
+            juce::Timer::callAfterDelay(250, [that = juce::Component::SafePointer(this)]() {
+                if (that)
+                    that->enableTypeAheadIfReady();
+            });
+        }
+        else
+        {
+            typeAhead->searchAndShowLBox();
         }
     }
     else
@@ -1006,6 +1433,8 @@ void PatchSelector::enableTypeAheadIfReady()
 
     bool enable = true;
     auto txt = pname;
+    if (!typeAhead->lastSearch.empty())
+        txt = typeAhead->lastSearch;
 
     if (storage->patchDB->numberOfJobsOutstanding() > 0)
     {
@@ -1014,6 +1443,13 @@ void PatchSelector::enableTypeAheadIfReady()
               std::to_string(storage->patchDB->numberOfJobsOutstanding()) + " items left";
     }
 
+    bool patchStickySearchbox = Surge::Storage::getUserDefaultValue(
+        storage, Surge::Storage::RetainPatchSearchboxAfterLoad, true);
+
+    typeAhead->dismissMode = patchStickySearchbox
+                                 ? TypeAhead::DISMISS_ON_CMD_RETURN_RETAIN_ON_RETURN
+                                 : TypeAhead::DISMISS_ON_RETURN_RETAIN_ON_CMD_RETURN;
+
     typeAhead->setText(txt, juce::NotificationType::dontSendNotification);
     typeAhead->setEnabled(enable);
 
@@ -1021,22 +1457,44 @@ void PatchSelector::enableTypeAheadIfReady()
     {
         typeAhead->grabKeyboardFocus();
         typeAhead->selectAll();
+        typeAhead->searchAndShowLBox();
     }
     else
     {
-        juce::Timer::callAfterDelay(250, [this]() { this->enableTypeAheadIfReady(); });
+        juce::Timer::callAfterDelay(250, [that = juce::Component::SafePointer(this)]() {
+            if (that)
+                that->enableTypeAheadIfReady();
+        });
     }
 }
 
 bool PatchSelector::keyPressed(const juce::KeyPress &key)
 {
+    if (isTypeaheadSearchOn && storage->patchDB->numberOfJobsOutstanding() > 0)
+    {
+        // Any keypress while we are waiting is ignored other than perhaps escape
+        if (key.getKeyCode() == juce::KeyPress::escapeKey)
+        {
+            toggleTypeAheadSearch(false);
+            repaint();
+        }
+        return true;
+    }
+
     auto [action, mod] = Surge::Widgets::accessibleEditAction(key, storage);
 
     if (action == OpenMenu)
     {
-        showClassicMenu();
+        showClassicMenu(false, key.getModifiers().isCommandDown());
         return true;
     }
+
+    if (action == Return)
+    {
+        showClassicMenu(false, key.getModifiers().isCommandDown());
+        return true;
+    }
+
     return false;
 }
 
@@ -1044,14 +1502,14 @@ class PatchSelectorAH : public juce::AccessibilityHandler
 {
   public:
     explicit PatchSelectorAH(PatchSelector *sel)
-        : selector(sel), juce::AccessibilityHandler(
-                             *sel, juce::AccessibilityRole::label,
-                             juce::AccessibilityActions()
-                                 .addAction(juce::AccessibilityActionType::press,
-                                            [sel] { sel->openPatchBrowser(); })
-                                 .addAction(juce::AccessibilityActionType::showMenu,
-                                            [sel] { sel->showClassicMenu(); }),
-                             {std::make_unique<PatchSelectorValueInterface>(sel)})
+        : selector(sel),
+          juce::AccessibilityHandler(*sel, juce::AccessibilityRole::label,
+                                     juce::AccessibilityActions()
+                                         .addAction(juce::AccessibilityActionType::press,
+                                                    [sel] { sel->showClassicMenu(); })
+                                         .addAction(juce::AccessibilityActionType::showMenu,
+                                                    [sel] { sel->showClassicMenu(); }),
+                                     {std::make_unique<PatchSelectorValueInterface>(sel)})
     {
     }
 
@@ -1093,40 +1551,142 @@ void PatchSelectorCommentTooltip::paint(juce::Graphics &g)
     g.setColour(skin->getColor(clr::Background));
     g.fillRect(getLocalBounds().reduced(1));
     g.setColour(skin->getColor(clr::Text));
-    g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(9));
-    g.drawMultiLineText(comment, 5, g.getCurrentFont().getHeight() + 2, getWidth(),
+    g.setFont(skin->fontManager->getLatoAtSize(9));
+    g.drawMultiLineText(comment, 4, g.getCurrentFont().getHeight() + 2, getWidth(),
                         juce::Justification::left);
 }
 
 void PatchSelectorCommentTooltip::positionForComment(const juce::Point<int> &centerPoint,
-                                                     const std::string &c)
+                                                     const std::string &c,
+                                                     const int maxTooltipWidth)
 {
     comment = c;
 
     std::stringstream ss(comment);
     std::string to;
 
-    int idx = 0;
+    int numLines = 0;
 
-    auto ft = Surge::GUI::getFontManager()->getLatoAtSize(9);
-    auto width = 0;
+    auto ft = skin->fontManager->getLatoAtSize(9);
+    auto width = 0.f;
+    auto maxWidth = (float)maxTooltipWidth;
 
     while (std::getline(ss, to, '\n'))
     {
-        auto w = ft.getStringWidth(to);
+        auto w = SST_STRING_WIDTH_FLOAT(ft, to);
+
+        // in case of an empty line, we still need to count it as an extra row
+        // so bump it up a bit so that the rows calculation ceils to 1
+        if (w == 0.f)
+        {
+            w = 1.f;
+        }
+
+        auto rows = std::ceil(w / maxWidth);
+
         width = std::max(w, width);
-        idx++;
+        numLines += (int)rows;
     }
 
-    auto height = std::max(idx * (ft.getHeight() + 2), 30.f);
+    auto height = std::max((numLines * (ft.getHeight() + 2)) + 2, 16.f);
+    auto margin = 10;
 
     auto r = juce::Rectangle<int>()
                  .withCentre(juce::Point(centerPoint.x, centerPoint.y))
-                 .withSizeKeepingCentre(width + 12, height)
+                 .withSizeKeepingCentre(std::min(width + margin, maxWidth), height)
                  .translated(0, height / 2);
+
     setBounds(r);
     repaint();
 }
 
+void PatchSelector::searchUpdated()
+{
+    outstandingSearches++;
+    auto cb = [ptr = juce::Component::SafePointer(this)]() {
+        if (ptr)
+        {
+            ptr->outstandingSearches--;
+            if (ptr->isTypeaheadSearchOn && ptr->outstandingSearches == 0)
+            {
+                auto sge = ptr->firstListenerOfType<SurgeGUIEditor>();
+                if (sge)
+                {
+                    auto items = ptr->patchDbProvider->lastSearchResult.size();
+                    auto ann = fmt::format("Found {} patches; Down to navigate", items);
+                    sge->enqueueAccessibleAnnouncement(ann);
+                }
+            }
+        }
+    };
+    juce::Timer::callAfterDelay(1.0 * 1000, cb);
+}
+
+void PatchSelector::typeaheadButtonPressed()
+{
+    tooltipCountdown = -1;
+    toggleCommentTooltip(false);
+
+    if (wasTypeaheadCanceledSinceLastIdle)
+    {
+        toggleTypeAheadSearch(false);
+    }
+    else
+    {
+        toggleTypeAheadSearch(!isTypeaheadSearchOn);
+    }
+}
+
+void PatchSelector::setIsFavorite(bool b)
+{
+    isFavorite = b;
+    favoriteButton->setTitle(b ? "Remove from Favorites" : "Add to Favorites");
+    favoriteButton->setDescription(b ? "Remove from Favorites" : "Add to Favorites");
+    if (favoriteButton->getAccessibilityHandler())
+    {
+        favoriteButton->getAccessibilityHandler()->notifyAccessibilityEvent(
+            juce::AccessibilityEvent::titleChanged);
+    }
+    repaint();
+}
+
+void PatchSelector::showFavoritesMenu()
+{
+    juce::PopupMenu menu;
+
+    tooltipCountdown = -1;
+    toggleCommentTooltip(false);
+
+    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(menu, "FAVORITES");
+
+    auto haveFavs = optionallyAddFavorites(menu, false, false);
+
+    if (haveFavs)
+    {
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+        stuckHover = true;
+        menu.showMenuAsync(sge->popupMenuOptions(favoritesRect.getBottomLeft()),
+                           [that = juce::Component::SafePointer(this)](int) {
+                               if (that)
+                               {
+                                   that->stuckHover = false;
+                                   that->endHover();
+                               }
+                           });
+    }
+}
+
+void PatchSelector::toggleFavoriteStatus()
+{
+    setIsFavorite(!isFavorite);
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+    if (sge)
+    {
+        sge->setPatchAsFavorite(pname, isFavorite);
+        repaint();
+    }
+}
 } // namespace Widgets
 } // namespace Surge

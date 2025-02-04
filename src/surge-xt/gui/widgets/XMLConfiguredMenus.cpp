@@ -1,17 +1,24 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
 #include "XMLConfiguredMenus.h"
 #include "SurgeStorage.h"
@@ -21,6 +28,7 @@
 #include "SurgeImage.h"
 #include "AccessibleHelpers.h"
 #include "MenuCustomComponents.h"
+#include "widgets/EffectChooser.h"
 
 namespace Surge
 {
@@ -248,7 +256,8 @@ void XMLMenuPopulator::populate()
 
             if (depth == 1 && hasFac && hasUser)
             {
-                m.addSectionHeader("FACTORY PRESETS");
+                Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(m,
+                                                                                "FACTORY PRESETS");
             }
 
             for (auto c : children)
@@ -259,7 +268,7 @@ void XMLMenuPopulator::populate()
                 case FACPS:
                 {
                     auto idx = c->idx;
-                    m.addItem(c->name, [host, idx]() { host->loadByIndex(idx); });
+                    m.addItem(c->name, [host, idx, n = c->name]() { host->loadByIndex(n, idx); });
                 }
                 break;
                 case USPS:
@@ -268,10 +277,11 @@ void XMLMenuPopulator::populate()
                     {
                         inFac = false;
                         m.addColumnBreak();
-                        m.addSectionHeader("USER PRESETS");
+                        Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(
+                            m, "USER PRESETS");
                     }
                     auto idx = c->idx;
-                    m.addItem(c->name, [host, idx]() { host->loadByIndex(idx); });
+                    m.addItem(c->name, [host, n = c->name, idx]() { host->loadByIndex(n, idx); });
                 }
                 break;
                 case SEP:
@@ -283,7 +293,7 @@ void XMLMenuPopulator::populate()
                 {
                     if (c->colBreak)
                         m.addColumnBreak();
-                    m.addSectionHeader(c->name);
+                    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(m, c->name);
                 }
                 break;
                 case FOLD:
@@ -315,8 +325,9 @@ void XMLMenuPopulator::populate()
     maxIdx = allPresets.size();
 }
 
-OscillatorMenu::OscillatorMenu()
+OscillatorMenu::OscillatorMenu() : juce::Component(), WidgetBaseMixin<OscillatorMenu>(this)
 {
+    selectedIdx = -1;
     strcpy(mtype, "osc");
     setDescription("Oscillator Type");
     setTitle("Oscillator Type");
@@ -332,7 +343,7 @@ void OscillatorMenu::paint(juce::Graphics &g)
 
     int i = osc->type.val.i;
 
-    g.setFont(Surge::GUI::getFontManager()->getLatoAtSize(font_size, font_style));
+    g.setFont(skin->fontManager->getLatoAtSize(font_size, font_style));
 
     if (isHovered)
     {
@@ -356,13 +367,90 @@ void OscillatorMenu::paint(juce::Graphics &g)
 void OscillatorMenu::loadSnapshot(int type, TiXmlElement *e, int idx)
 {
     auto sge = firstListenerOfType<SurgeGUIEditor>();
+
     if (sge)
     {
         auto sc = sge->current_scene;
         sge->oscilatorMenuIndex[sc][sge->current_osc[sc]] = idx;
+        sge->undoManager()->pushOscillator(sc, sge->current_osc[sc]);
+
+        auto announce = std::string("Oscillator Type is ") + osc_type_names[type];
+        sge->enqueueAccessibleAnnouncement(announce);
     }
     osc->queue_type = type;
     osc->queue_xmldata = e;
+}
+
+void OscillatorMenu::setOscillatorStorage(OscillatorStorage *o)
+{
+    osc = o;
+
+    if (selectedIdx == -1)
+    {
+        int idx = 0;
+
+        for (auto pr : allPresets)
+        {
+            if (pr.itemType == osc->type.val.i && selectedIdx < 0)
+            {
+                selectedIdx = idx;
+            }
+
+            idx++;
+        }
+
+        if (selectedIdx < 0)
+        {
+            selectedIdx = 0;
+        }
+    }
+}
+
+void OscillatorMenu::populate()
+{
+    XMLMenuPopulator::populate();
+
+    menu.addSeparator();
+
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+    if (sge)
+    {
+        auto hu = sge->helpURLForSpecial("osc-select");
+        auto lurl = hu;
+
+        if (hu != "")
+        {
+            lurl = sge->fullyResolvedHelpURL(hu);
+        }
+
+        auto sc = sge->current_scene;
+        auto osc = sge->current_osc[sc];
+
+        std::string title = fmt::format("Osc {} Type", osc + 1);
+
+        auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(title, lurl);
+        hmen->setSkin(skin, associatedBitmapStore);
+        hmen->setCentered(false);
+
+        menu.addCustomItem(-1, std::move(hmen), nullptr, title);
+
+        if (storage->oscReceiving)
+        {
+            menu.addSeparator();
+
+            auto oscName = storage->getPatch().scene[sc].osc[osc].type.get_osc_name();
+
+            auto i =
+                juce::PopupMenu::Item(fmt::format("OSC: {}", oscName))
+                    .setEnabled(true)
+                    .setAction([oscName]() { juce::SystemClipboard::copyTextToClipboard(oscName); })
+                    .setColour(
+                        sge->currentSkin->getColor(Colors::PopupMenu::Text).withAlpha(0.75f));
+
+            menu.addItem(i);
+        }
+    }
 }
 
 void OscillatorMenu::mouseDown(const juce::MouseEvent &event)
@@ -372,8 +460,14 @@ void OscillatorMenu::mouseDown(const juce::MouseEvent &event)
         return;
     }
 
-    menu.showMenuAsync(juce::PopupMenu::Options(),
+    populate();
+
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+    stuckHoverOn();
+    menu.showMenuAsync(sge->popupMenuOptions(this),
                        Surge::GUI::makeAsyncCallback<OscillatorMenu>(this, [](auto *that, int) {
+                           that->stuckHoverOff();
                            that->isHovered = false;
                            that->repaint();
                        }));
@@ -389,17 +483,9 @@ void OscillatorMenu::mouseWheelMove(const juce::MouseEvent &event,
         jogBy(-dir);
     }
 }
-void OscillatorMenu::mouseEnter(const juce::MouseEvent &event)
-{
-    isHovered = true;
-    repaint();
-}
+void OscillatorMenu::mouseEnter(const juce::MouseEvent &event) { startHover(event.position); }
 
-void OscillatorMenu::mouseExit(const juce::MouseEvent &event)
-{
-    isHovered = false;
-    repaint();
-}
+void OscillatorMenu::mouseExit(const juce::MouseEvent &event) { endHover(); }
 
 bool OscillatorMenu::keyPressed(const juce::KeyPress &key)
 {
@@ -410,7 +496,9 @@ bool OscillatorMenu::keyPressed(const juce::KeyPress &key)
 
     if (action == OpenMenu || action == Return)
     {
-        menu.showMenuAsync(juce::PopupMenu::Options());
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+        menu.showMenuAsync(sge->popupMenuOptions());
         return true;
     }
 
@@ -459,14 +547,15 @@ template <typename T> struct XMLMenuAH : public juce::AccessibilityHandler
     };
 
     explicit XMLMenuAH(T *s)
-        : comp(s), juce::AccessibilityHandler(
-                       *s, juce::AccessibilityRole::button,
-                       juce::AccessibilityActions()
-                           .addAction(juce::AccessibilityActionType::showMenu,
-                                      [this]() { this->showMenu(); })
-                           .addAction(juce::AccessibilityActionType::press,
-                                      [this]() { this->showMenu(); }),
-                       AccessibilityHandler::Interfaces{std::make_unique<XMLMenuTextValue>(s)})
+        : comp(s),
+          juce::AccessibilityHandler(
+              *s, juce::AccessibilityRole::button,
+              juce::AccessibilityActions()
+                  .addAction(juce::AccessibilityActionType::showMenu,
+                             [this]() { this->showMenu(); })
+                  .addAction(juce::AccessibilityActionType::press, [this]() { this->showMenu(); }),
+              AccessibilityHandler::Interfaces{std::make_unique<XMLMenuTextValue>(s)})
+
     {
     }
     void showMenu() { comp->menu.showMenuAsync(juce::PopupMenu::Options()); }
@@ -479,8 +568,9 @@ std::unique_ptr<juce::AccessibilityHandler> OscillatorMenu::createAccessibilityH
     return std::make_unique<XMLMenuAH<OscillatorMenu>>(this);
 }
 
-FxMenu::FxMenu()
+FxMenu::FxMenu() : juce::Component(), WidgetBaseMixin<FxMenu>(this)
 {
+    selectedIdx = -1;
     strcpy(mtype, "fx");
     setDescription("FX Type");
     setTitle("FX Type");
@@ -497,11 +587,36 @@ void FxMenu::paint(juce::Graphics &g)
     if (isHovered)
         fgc = skin->getColor(Colors::Effect::Menu::TextHover);
 
-    g.setFont(Surge::GUI::getFontManager()->displayFont);
+    g.setFont(skin->fontManager->displayFont);
     g.setColour(fgc);
     auto r = getLocalBounds().reduced(2).withTrimmedLeft(4).withTrimmedRight(12);
     g.drawText(fxslot_names[current_fx], r, juce::Justification::centredLeft);
     g.drawText(fx_type_shortnames[fx->type.val.i], r, juce::Justification::centredRight);
+}
+
+void FxMenu::setFxStorage(FxStorage *s)
+{
+    fx = s;
+
+    if (selectedIdx == -1)
+    {
+        int idx = 0;
+
+        for (auto pr : allPresets)
+        {
+            if (pr.itemType == fx->type.val.i && selectedIdx < 0)
+            {
+                selectedIdx = idx;
+            }
+
+            idx++;
+        }
+
+        if (selectedIdx < 0)
+        {
+            selectedIdx = 0;
+        }
+    }
 }
 
 void FxMenu::mouseDown(const juce::MouseEvent &event)
@@ -511,27 +626,30 @@ void FxMenu::mouseDown(const juce::MouseEvent &event)
         return;
     }
 
-    menu.showMenuAsync(juce::PopupMenu::Options(),
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+    populate();
+
+    stuckHoverOn();
+    menu.showMenuAsync(sge->popupMenuOptions(this),
                        Surge::GUI::makeAsyncCallback<FxMenu>(this, [](auto *that, int) {
+                           that->stuckHoverOff();
                            that->isHovered = false;
                            that->repaint();
                        }));
 }
 
-void FxMenu::mouseEnter(const juce::MouseEvent &event)
-{
-    isHovered = true;
-    repaint();
-}
+void FxMenu::mouseEnter(const juce::MouseEvent &event) { startHover(event.position); }
 
-void FxMenu::mouseExit(const juce::MouseEvent &event)
-{
-    isHovered = false;
-    repaint();
-}
+void FxMenu::mouseExit(const juce::MouseEvent &event) { endHover(); }
 
 void FxMenu::loadSnapshot(int type, TiXmlElement *e, int idx)
 {
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+    if (sge)
+    {
+        sge->undoManager()->pushFX(current_fx);
+    }
     if (type > -1)
     {
         fxbuffer->type.val.i = type;
@@ -553,8 +671,10 @@ void FxMenu::loadSnapshot(int type, TiXmlElement *e, int idx)
             {
                 double d;
                 int j;
-                char lbl[TXT_SIZE], sublbl[TXT_SIZE];
-                snprintf(lbl, TXT_SIZE, "p%i", i);
+                std::string lbl;
+
+                lbl = fmt::format("p{:d}", i);
+
                 if (fxbuffer->p[i].valtype == vt_float)
                 {
                     if (e->QueryDoubleAttribute(lbl, &d) == TIXML_SUCCESS)
@@ -566,15 +686,22 @@ void FxMenu::loadSnapshot(int type, TiXmlElement *e, int idx)
                         fxbuffer->p[i].set_storage_value(j);
                 }
 
-                snprintf(sublbl, TXT_SIZE, "p%i_temposync", i);
+                lbl = fmt::format("p{:d}_temposync", i);
                 fxbuffer->p[i].temposync =
-                    ((e->QueryIntAttribute(sublbl, &j) == TIXML_SUCCESS) && (j == 1));
-                snprintf(sublbl, TXT_SIZE, "p%i_extend_range", i);
+                    ((e->QueryIntAttribute(lbl, &j) == TIXML_SUCCESS) && (j == 1));
+
+                lbl = fmt::format("p{:d}_extend_range", i);
                 fxbuffer->p[i].set_extend_range(
-                    ((e->QueryIntAttribute(sublbl, &j) == TIXML_SUCCESS) && (j == 1)));
-                snprintf(sublbl, TXT_SIZE, "p%i_deactivated", i);
+                    ((e->QueryIntAttribute(lbl, &j) == TIXML_SUCCESS) && (j == 1)));
+
+                lbl = fmt::format("p{:d}_deactivated", i);
                 fxbuffer->p[i].deactivated =
-                    ((e->QueryIntAttribute(sublbl, &j) == TIXML_SUCCESS) && (j == 1));
+                    ((e->QueryIntAttribute(lbl, &j) == TIXML_SUCCESS) && (j == 1));
+
+                lbl = fmt::format("p{:d}_deform_type", i);
+
+                if (e->QueryIntAttribute(lbl, &j) == TIXML_SUCCESS)
+                    fxbuffer->p[i].deform_type = j;
             }
         }
         else
@@ -584,7 +711,7 @@ void FxMenu::loadSnapshot(int type, TiXmlElement *e, int idx)
     }
 }
 
-void FxMenu::populate()
+void FxMenu::populateForContext(bool isCalledInEffectChooser)
 {
     auto sge = firstListenerOfType<SurgeGUIEditor>();
 
@@ -593,38 +720,88 @@ void FxMenu::populate()
 
     XMLMenuPopulator::populate();
 
-    menu.addColumnBreak();
-    menu.addSectionHeader("FUNCTIONS");
+    auto cfxid = -1;
+    auto cfxtype = 0;
+    bool addDeact = false;
+    bool isDeact = false;
+    bool enableClear = true;
 
-    menu.addItem(Surge::GUI::toOSCaseForMenu("Clear Current FX Unit"), [this]() {
-        loadSnapshot(fxt_off, nullptr, 0);
-        if (getControlListener())
+    if (sge)
+    {
+        cfxid = sge->effectChooser->currentClicked;
+
+        if (cfxid >= 0)
         {
-            getControlListener()->valueChanged(asControlValueInterface());
+            auto deactbm = sge->effectChooser->getDeactivatedBitmask();
+
+            addDeact = true;
+            isDeact = deactbm & (1 << cfxid);
+            cfxtype = sge->effectChooser->fxTypes[cfxid];
+            enableClear = cfxtype != fxt_off;
         }
-        repaint();
-    });
+    }
+
+    auto cfx = std::string{"Current FX Slot"};
+    auto helpMenuText = std::string{"FX Presets"};
+    auto helpMenuScreeReaderText = helpMenuText;
+
+    if (cfxid >= 0 && cfxid < n_fx_slots)
+    {
+        if (isCalledInEffectChooser)
+        {
+            cfx = fxslot_longnames[cfxid];
+            helpMenuText = cfx;
+        }
+
+        helpMenuScreeReaderText =
+            fmt::format("FX Presets: {} {}", fxslot_longnames[cfxid], fx_type_names[cfxtype]);
+    }
+
+    menu.addColumnBreak();
+    Surge::Widgets::MenuCenteredBoldLabel::addToMenuAsSectionHeader(menu, "FUNCTIONS");
+
+    if (addDeact)
+    {
+        menu.addItem(
+            Surge::GUI::toOSCase(fmt::format("{} {}", (isDeact ? "Activate" : "Deactivate"), cfx)),
+            [that = juce::Component::SafePointer(sge->effectChooser.get())]() {
+                that->toggleSelectedDeactivation();
+                that->repaint();
+            });
+    }
+
+    menu.addItem(Surge::GUI::toOSCase(fmt::format("Clear {}", cfx)), enableClear, false,
+                 [this, cfxid, that = juce::Component::SafePointer(sge->effectChooser.get())]() {
+                     that->setEffectSlotDeactivation(cfxid, false);
+                     that->repaint();
+                     loadSnapshot(fxt_off, nullptr, 0);
+                     if (getControlListener())
+                     {
+                         getControlListener()->valueChanged(asControlValueInterface());
+                     }
+                     repaint();
+                 });
 
     if (sge)
     {
         auto initSubmenu = juce::PopupMenu();
 
-        initSubmenu.addItem(Surge::GUI::toOSCaseForMenu("Clear Scene A Insert FX Chain"), true,
-                            false, [this, sge]() { sge->enqueueFXChainClear(0); });
+        initSubmenu.addItem(Surge::GUI::toOSCase("Clear Scene A Insert FX Chain"), true, false,
+                            [this, sge]() { sge->enqueueFXChainClear(0); });
 
-        initSubmenu.addItem(Surge::GUI::toOSCaseForMenu("Clear Scene B Insert FX Chain"), true,
-                            false, [this, sge]() { sge->enqueueFXChainClear(1); });
+        initSubmenu.addItem(Surge::GUI::toOSCase("Clear Scene B Insert FX Chain"), true, false,
+                            [this, sge]() { sge->enqueueFXChainClear(1); });
 
-        initSubmenu.addItem(Surge::GUI::toOSCaseForMenu("Clear Send FX Chain"), true, false,
+        initSubmenu.addItem(Surge::GUI::toOSCase("Clear Send FX Chain"), true, false,
                             [this, sge]() { sge->enqueueFXChainClear(2); });
 
-        initSubmenu.addItem(Surge::GUI::toOSCaseForMenu("Clear Global FX Chain"), true, false,
+        initSubmenu.addItem(Surge::GUI::toOSCase("Clear Global FX Chain"), true, false,
                             [this, sge]() { sge->enqueueFXChainClear(3); });
 
-        initSubmenu.addItem(Surge::GUI::toOSCaseForMenu("Clear All FX Chains"), true, false,
+        initSubmenu.addItem(Surge::GUI::toOSCase("Clear All FX Chains"), true, false,
                             [this, sge]() { sge->enqueueFXChainClear(-1); });
 
-        menu.addSubMenu(Surge::GUI::toOSCaseForMenu("Clear Chains"), initSubmenu);
+        menu.addSubMenu(Surge::GUI::toOSCase("Clear Chains"), initSubmenu);
     }
 
     menu.addSeparator();
@@ -638,19 +815,18 @@ void FxMenu::populate()
         }
     };
 
-    menu.addItem(Surge::GUI::toOSCaseForMenu("Refresh FX Preset List"), rsA);
+    menu.addItem(Surge::GUI::toOSCase("Refresh FX Preset List"), rsA);
     if (fx->type.val.i != fxt_off)
     {
-        menu.addItem(Surge::GUI::toOSCaseForMenu("Save FX Preset As..."),
-                     [this]() { this->saveFX(); });
+        menu.addItem(Surge::GUI::toOSCase("Save FX Preset As..."), [this]() { this->saveFX(); });
     }
 
     menu.addSeparator();
 
-    menu.addItem(Surge::GUI::toOSCaseForMenu("Copy FX Preset"), [this]() { this->copyFX(); });
+    menu.addItem(Surge::GUI::toOSCase("Copy FX Preset"), [this]() { this->copyFX(); });
     if (Surge::FxClipboard::isPasteAvailable(fxClipboard))
     {
-        menu.addItem(Surge::GUI::toOSCaseForMenu("Paste FX Preset"), [this]() {
+        menu.addItem(Surge::GUI::toOSCase("Paste FX Preset"), [this]() {
             this->pasteFX();
             this->storage->getPatch().isDirty = true;
         });
@@ -668,11 +844,28 @@ void FxMenu::populate()
             lurl = sge->fullyResolvedHelpURL(hu);
         }
 
-        auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>("FX Presets", lurl);
+        auto hmen = std::make_unique<Surge::Widgets::MenuTitleHelpComponent>(
+            helpMenuText, helpMenuScreeReaderText, lurl);
         hmen->setSkin(skin, associatedBitmapStore);
-        hmen->setCenterBold(false);
+        hmen->setCentered(false);
 
-        menu.addCustomItem(-1, std::move(hmen));
+        menu.addCustomItem(-1, std::move(hmen), nullptr, helpMenuScreeReaderText);
+
+        if (storage->oscReceiving)
+        {
+            menu.addSeparator();
+
+            auto oscName = storage->getPatch().fx[sge->current_fx].type.get_osc_name();
+
+            auto i =
+                juce::PopupMenu::Item(fmt::format("OSC: {}", oscName))
+                    .setEnabled(true)
+                    .setAction([oscName]() { juce::SystemClipboard::copyTextToClipboard(oscName); })
+                    .setColour(
+                        sge->currentSkin->getColor(Colors::PopupMenu::Text).withAlpha(0.75f));
+
+            menu.addItem(i);
+        }
     }
 }
 
@@ -681,7 +874,7 @@ Surge::FxClipboard::Clipboard FxMenu::fxClipboard;
 void FxMenu::copyFX()
 {
     Surge::FxClipboard::copyFx(storage, fx, fxClipboard);
-    memcpy((void *)fxbuffer, (void *)fx, sizeof(FxStorage));
+    *fxbuffer = *fx;
 }
 
 void FxMenu::pasteFX()
@@ -698,18 +891,26 @@ void FxMenu::saveFX()
     auto *sge = firstListenerOfType<SurgeGUIEditor>();
     if (sge)
     {
-        sge->promptForMiniEdit("", "Enter the preset name:", "Save FX Preset", juce::Point<int>{},
-                               [this](const std::string &s) {
-                                   this->storage->fxUserPreset->saveFxIn(this->storage, fx, s);
-                                   auto *sge = firstListenerOfType<SurgeGUIEditor>();
-                                   if (sge)
-                                       sge->queueRebuildUI();
-                               });
+        sge->promptForMiniEdit(
+            "", "Enter the preset name:", "Save FX Preset", juce::Point<int>{},
+            [this](const std::string &s) {
+                this->storage->fxUserPreset->saveFxIn(this->storage, fx, s);
+                auto *sge = firstListenerOfType<SurgeGUIEditor>();
+                if (sge)
+                    sge->queueRebuildUI();
+            },
+            this);
     }
 }
 
 void FxMenu::loadUserPreset(const Surge::Storage::FxUserPreset::Preset &p)
 {
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+    if (sge)
+    {
+        sge->undoManager()->pushFX(current_fx);
+    }
+
     this->storage->fxUserPreset->loadPresetOnto(p, storage, fxbuffer);
 
     selectedIdx = -1;
@@ -720,43 +921,55 @@ void FxMenu::loadUserPreset(const Surge::Storage::FxUserPreset::Preset &p)
 
 void FxMenu::scanExtraPresets()
 {
-    storage->fxUserPreset->doPresetRescan(storage);
-    for (const auto &tp : storage->fxUserPreset->getPresetsByType())
+    try
     {
-        // So let's run all presets until we find the first item with type tp.first
-        auto alit = allPresets.begin();
-        while (alit->itemType != tp.first && alit != allPresets.end())
-            alit++;
-        std::vector<std::string> rootPath;
-        rootPath.push_back(alit->pathElements[0]);
-
-        while (alit != allPresets.end() && alit->itemType == tp.first)
-            alit++;
-
-        // OK so alit now points at the end of the list
-        alit = allPresets.insert(alit, tp.second.size(), Item());
-
-        // OK so insert 'size' into all presets at the end of the position of the type
-
-        for (const auto ps : tp.second)
+        storage->fxUserPreset->doPresetRescan(storage);
+        for (const auto &tp : storage->fxUserPreset->getPresetsByType())
         {
-            alit->itemType = tp.first;
-            alit->name = ps.name;
-            alit->isUser = !ps.isFactory;
-            alit->path = string_to_path(ps.file);
-            auto thisPath = rootPath;
-            for (const auto &q : ps.subPath)
-                thisPath.push_back(path_to_string(q));
+            // So let's run all presets until we find the first item with type tp.first
+            auto alit = allPresets.begin();
+            while (alit->itemType != tp.first && alit != allPresets.end())
+                alit++;
+            std::vector<std::string> rootPath;
+            rootPath.push_back(alit->pathElements[0]);
 
-            alit->pathElements = thisPath;
-            alit->hasFxUserPreset = true;
-            alit->fxPreset = ps;
-            alit++;
+            while (alit != allPresets.end() && alit->itemType == tp.first)
+                alit++;
+
+            // OK so alit now points at the end of the list
+            alit = allPresets.insert(alit, tp.second.size(), Item());
+
+            // OK so insert 'size' into all presets at the end of the position of the type
+
+            for (const auto ps : tp.second)
+            {
+                alit->itemType = tp.first;
+                alit->name = ps.name;
+                alit->isUser = !ps.isFactory;
+                alit->path = string_to_path(ps.file);
+                auto thisPath = rootPath;
+                for (const auto &q : ps.subPath)
+                    thisPath.push_back(path_to_string(q));
+
+                alit->pathElements = thisPath;
+                alit->hasFxUserPreset = true;
+                alit->fxPreset = ps;
+                alit++;
+            }
         }
+    }
+    catch (const fs::filesystem_error &e)
+    {
+        // really nothing to do about this other than continue without the preset
+        std::ostringstream oss;
+        oss << "Experienced file system error when scanning user FX. " << e.what();
+
+        if (storage)
+            storage->reportError(oss.str(), "FileSystem Error");
     }
 }
 
-void FxMenu::loadByIndex(int index)
+void FxMenu::loadByIndex(const std::string &name, int index)
 {
     auto q = allPresets[index];
     if (q.xmlElement)
@@ -770,6 +983,12 @@ void FxMenu::loadByIndex(int index)
     selectedIdx = index;
     if (getControlListener())
         getControlListener()->valueChanged(asControlValueInterface());
+    auto sge = firstListenerOfType<SurgeGUIEditor>();
+    if (sge)
+    {
+        auto announce = std::string("Loaded FX Preset  ") + name;
+        sge->enqueueAccessibleAnnouncement(announce);
+    }
     repaint();
 }
 
@@ -792,7 +1011,9 @@ bool FxMenu::keyPressed(const juce::KeyPress &key)
 
     if (action == OpenMenu || action == Return)
     {
-        menu.showMenuAsync(juce::PopupMenu::Options());
+        auto sge = firstListenerOfType<SurgeGUIEditor>();
+
+        menu.showMenuAsync(sge->popupMenuOptions(this));
         return true;
     }
 

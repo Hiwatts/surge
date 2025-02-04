@@ -1,20 +1,27 @@
 /*
-** Surge Synthesizer is Free and Open Source Software
-**
-** Surge is made available under the Gnu General Public License, v3.0
-** https://www.gnu.org/licenses/gpl-3.0.en.html
-**
-** Copyright 2004-2021 by various individuals as described by the Git transaction log
-**
-** All source at: https://github.com/surge-synthesizer/surge.git
-**
-** Surge was a commercial product from 2004-2018, with Copyright and ownership
-** in that period held by Claes Johanson at Vember Audio. Claes made Surge
-** open source in September 2018.
-*/
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 
-#ifndef SURGE_XT_EFFECTCHOOSER_H
-#define SURGE_XT_EFFECTCHOOSER_H
+#ifndef SURGE_SRC_SURGE_XT_GUI_WIDGETS_EFFECTCHOOSER_H
+#define SURGE_SRC_SURGE_XT_GUI_WIDGETS_EFFECTCHOOSER_H
 
 #include "SurgeStorage.h"
 #include "SkinSupport.h"
@@ -31,7 +38,13 @@ namespace Surge
 {
 namespace Widgets
 {
-struct EffectChooser : public juce::Component, public WidgetBaseMixin<EffectChooser>
+struct EffectChooser;
+
+template <> void LongHoldMixin<EffectChooser>::onLongHold();
+
+struct EffectChooser : public juce::Component,
+                       public WidgetBaseMixin<EffectChooser>,
+                       public LongHoldMixin<EffectChooser>
 {
     EffectChooser();
     ~EffectChooser();
@@ -51,7 +64,7 @@ struct EffectChooser : public juce::Component, public WidgetBaseMixin<EffectChoo
     int getCurrentEffect() const { return currentEffect; }
     int currentEffect{0};
 
-    void setEffectType(int index, int type) { fxTypes[index] = type; }
+    void setEffectType(int index, int type);
     std::array<int, n_fx_slots> fxTypes;
 
     void mouseDoubleClick(const juce::MouseEvent &event) override;
@@ -65,11 +78,17 @@ struct EffectChooser : public juce::Component, public WidgetBaseMixin<EffectChoo
         mouseMove(event);
     }
     void mouseExit(const juce::MouseEvent &event) override { isHovered = false; }
+    bool keyPressed(const juce::KeyPress &) override;
     void endHover() override
     {
+        if (stuckHover)
+            return;
+
         isHovered = false;
         repaint();
     }
+
+    bool isCurrentlyHovered() override { return isHovered; }
 
     void resized() override;
 
@@ -83,6 +102,8 @@ struct EffectChooser : public juce::Component, public WidgetBaseMixin<EffectChoo
     void setDeactivatedBitmask(int d) { deactivatedBitmask = d; };
     int getDeactivatedBitmask() const { return deactivatedBitmask; }
     int deactivatedBitmask{0};
+    void toggleSelectedDeactivation();
+    void setEffectSlotDeactivation(int slotIdx, bool state);
 
     SurgeImage *bg{nullptr};
     void setBackgroundDrawable(SurgeImage *b) { bg = b; }
@@ -119,11 +140,16 @@ struct EffectChooser : public juce::Component, public WidgetBaseMixin<EffectChoo
     SurgeStorage *storage{nullptr};
     void setStorage(SurgeStorage *s) { storage = s; }
 
+    void createFXMenu();
+
     std::array<std::unique_ptr<juce::Component>, n_fx_slots> slotAccOverlays;
     std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EffectChooser);
 };
+
+template <> inline void LongHoldMixin<EffectChooser>::onLongHold() { asT()->createFXMenu(); }
+
 } // namespace Widgets
 } // namespace Surge
 

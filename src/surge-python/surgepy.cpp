@@ -1,3 +1,24 @@
+/*
+ * Surge XT - a free and open source hybrid synthesizer,
+ * built by Surge Synth Team
+ *
+ * Learn more at https://surge-synthesizer.github.io/
+ *
+ * Copyright 2018-2024, various authors, as described in the GitHub
+ * transaction log.
+ *
+ * Surge XT is released under the GNU General Public Licence v3
+ * or later (GPL-3.0-or-later). The license is found in the "LICENSE"
+ * file in the root of this repository, or at
+ * https://www.gnu.org/licenses/gpl-3.0.en.html
+ *
+ * Surge was a commercial product from 2004-2018, copyright and ownership
+ * held by Claes Johanson at Vember Audio during that period.
+ * Claes made Surge open source in September 2018.
+ *
+ * All source for Surge XT is available at
+ * https://github.com/surge-synthesizer/surge
+ */
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
@@ -6,10 +27,16 @@
 #include <utility>
 
 #include "SurgeSynthesizer.h"
+#include "SurgeStorage.h"
 #include "version.h"
 #include "filesystem/import.h"
 
 namespace py = pybind11;
+
+/*
+ * Generate stub types by running `pip install pybind11-stubgen && pybind11-stubgen surgepy`
+ * and copy `out/` folder contents to `./surgepy`.
+ */
 
 class PythonPluginLayerProxy : public SurgeSynthesizer::PluginLayer
 {
@@ -23,7 +50,7 @@ static std::mutex spysetup_mutex;
 
 /*
  * The way we've decided to expose to python is through some wrapper objects
- * which give us the control gorup / control group entry / param hierarchy.
+ * which give us the control group / control group entry / param hierarchy.
  * So here's some small helper objects
  */
 
@@ -102,6 +129,8 @@ struct SurgePyModRouting
 {
     SurgePyModSource source;
     SurgePyNamedParam dest;
+    int source_scene;
+    int source_index;
     float depth;
     float normalizedDepth;
 };
@@ -316,7 +345,6 @@ class SurgePyPatchConverter
 #define ADD(x) addParam(res, #x, patch.x);
         ADD(scene_active);
         ADD(scenemode);
-        // ADD( scenemorph );
         ADD(splitpoint);
         ADD(volume);
         ADD(polylimit);
@@ -470,12 +498,16 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
     {
         playNote(ch, note, vel, detune);
     }
+
     void pitchBendWithInts(int ch, int bend) { pitchBend(ch, bend); }
+
     void polyAftertouchWithInts(int channel, int key, int value)
     {
         polyAftertouch(channel, key, value);
     }
+
     void channelAftertouchWithInts(int channel, int value) { channelAftertouch(channel, value); }
+
     void channelControllerWithInts(int channel, int cc, int value)
     {
         channelController(channel, cc, value);
@@ -491,6 +523,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             return v.b;
         return 0;
     }
+
     float getParamMin(const SurgePyNamedParam &id)
     {
         auto p = storage.getPatch().param_ptr[id.getID().getSynthSideId()];
@@ -498,6 +531,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             return getv(p, p->val_min);
         return 0;
     }
+
     float getParamMax(const SurgePyNamedParam &id)
     {
         auto p = storage.getPatch().param_ptr[id.getID().getSynthSideId()];
@@ -505,6 +539,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             return getv(p, p->val_max);
         return 0;
     }
+
     float getParamDef(const SurgePyNamedParam &id)
     {
         auto p = storage.getPatch().param_ptr[id.getID().getSynthSideId()];
@@ -512,6 +547,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             return getv(p, p->val_default);
         return 0;
     }
+
     float getParamVal(const SurgePyNamedParam &id)
     {
         auto p = storage.getPatch().param_ptr[id.getID().getSynthSideId()];
@@ -519,17 +555,19 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             return getv(p, p->val);
         return 0;
     }
+
     std::string getParamDisplay(const SurgePyNamedParam &id)
     {
         auto p = storage.getPatch().param_ptr[id.getID().getSynthSideId()];
+
         if (p)
         {
-            char txt[256];
-            p->get_display(txt);
-            return txt;
+            return p->get_display();
         }
+
         return "<error>";
     }
+
     std::string getParamValType(const SurgePyNamedParam &id)
     {
         auto p = storage.getPatch().param_ptr[id.getID().getSynthSideId()];
@@ -546,6 +584,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
         }
         return "<error>";
     }
+
     std::string getParamInfo(const SurgePyNamedParam &id)
     {
         const auto val = getParamVal(id);
@@ -578,19 +617,50 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
 
     void releaseNoteWithInts(int ch, int note, int vel) { releaseNote(ch, note, vel); }
 
-    void loadPatchPy(const std::string &s)
+    bool loadWavetablePy(int scene, int osc, const std::string &s)
     {
-        if (!fs::exists(string_to_path(s)))
+        auto path = string_to_path(s);
+
+        if (scene < 0 || scene >= n_scenes || osc < 0 || osc >= n_oscs)
+        {
+            throw std::invalid_argument("OSC and SCENE out of range in loadWavetable");
+        }
+        if (!fs::exists(path))
         {
             throw std::invalid_argument((std::string("File not found: ") + s).c_str());
         }
-        loadPatchByPath(s.c_str(), -1, "Python");
+        std::cout << "Would load " << scene << " " << osc << " with " << s << std::endl;
+        auto os = &(storage.getPatch().scene[scene].osc[osc]);
+        auto wt = &(os->wt);
+        storage.load_wt(s, wt, os);
+
+        return true;
+    }
+    bool loadPatchPy(const std::string &s)
+    {
+        auto path = string_to_path(s);
+
+        if (!fs::exists(path))
+        {
+            throw std::invalid_argument((std::string("File not found: ") + s).c_str());
+        }
+
+        bool result = loadPatchByPath(s.c_str(), -1, path.filename().u8string().c_str());
+
+        // update tempo if we want to change it on patch load
+        if (storage.unstreamedTempo > -1.f)
+        {
+            time_data.tempo = storage.unstreamedTempo;
+        }
+
+        return result;
     }
 
     void savePatchPy(const std::string &s) { savePatchToPath(string_to_path(s)); }
 
-    std::string factoryDataPath() const { return storage.datapath; }
-    std::string userDataPath() const { return storage.userDataPath; }
+    std::string factoryDataPath() const { return storage.datapath.u8string(); }
+
+    std::string userDataPath() const { return storage.userDataPath.u8string(); }
 
     py::array_t<float> getOutput()
     {
@@ -598,26 +668,32 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
                                   (const float *)(&output[0][0]));
     }
 
-    void setModulationPy(const SurgePyNamedParam &to, SurgePyModSource const &from, float amt)
+    void setModulationPy(const SurgePyNamedParam &to, SurgePyModSource const &from, float amt,
+                         int scene, int index)
     {
-        // FIXME - 4871
-        setModulation(to.getID().getSynthSideId(), (modsources)from.getModSource(), amt, 0, 0);
+        setModDepth01(to.getID().getSynthSideId(), (modsources)from.getModSource(), scene, index,
+                      amt);
     }
-    float getModulationPy(const SurgePyNamedParam &to, const SurgePyModSource &from)
+
+    float getModulationPy(const SurgePyNamedParam &to, const SurgePyModSource &from, int scene,
+                          int index)
     {
-        // FIXME - 4871
-        return getModulation(to.getID().getSynthSideId(), (modsources)from.getModSource(), 0, 0);
+        return getModDepth01(to.getID().getSynthSideId(), (modsources)from.getModSource(), scene,
+                             index);
     }
+
     bool isValidModulationPy(const SurgePyNamedParam &to, const SurgePyModSource &from)
     {
         return isValidModulation(to.getID().getSynthSideId(), (modsources)from.getModSource());
     }
-    bool isActiveModulationPy(const SurgePyNamedParam &to, const SurgePyModSource &from)
+
+    bool isActiveModulationPy(const SurgePyNamedParam &to, const SurgePyModSource &from, int scene,
+                              int index)
     {
-        // FIXME - 4871
-        return isActiveModulation(to.getID().getSynthSideId(), (modsources)from.getModSource(), 0,
-                                  0);
+        return isActiveModulation(to.getID().getSynthSideId(), (modsources)from.getModSource(),
+                                  scene, index);
     }
+
     bool isBipolarModulationPy(const SurgePyModSource &from)
     {
         return isBipolarModulation((modsources)from.getModSource());
@@ -631,6 +707,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
         memset(buf.ptr, 0, 2 * BLOCK_SIZE * nBlocks * sizeof(float));
         return res;
     }
+
     void processMultiBlock(const py::array_t<float> &arr, int startBlock = 0, int nBlocks = -1)
     {
         auto buf = arr.request(true);
@@ -645,6 +722,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
                 << buf.format << "/" << buf.size;
             throw std::invalid_argument(oss.str().c_str());
         }
+
         if (buf.ndim != 2)
         {
             std::ostringstream oss;
@@ -653,6 +731,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
                 << buf.ndim << " dimensions";
             throw std::invalid_argument(oss.str().c_str());
         }
+
         if (buf.shape[0] != 2 || buf.shape[1] % BLOCK_SIZE != 0)
         {
             std::ostringstream oss;
@@ -663,6 +742,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
         }
 
         size_t maxBlockStorage = buf.shape[1] / BLOCK_SIZE;
+
         if (startBlock >= maxBlockStorage)
         {
             std::ostringstream oss;
@@ -672,10 +752,12 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
         }
 
         int blockIterations = maxBlockStorage - startBlock;
+
         if (nBlocks > 0)
         {
             blockIterations = nBlocks;
         }
+
         if (startBlock + blockIterations > maxBlockStorage)
         {
             std::ostringstream oss;
@@ -688,14 +770,120 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
         float *dL = ptr + startBlock * BLOCK_SIZE;
         float *dR = ptr + buf.shape[1] + startBlock * BLOCK_SIZE;
 
+        process_input = false;
+
         for (auto i = 0; i < blockIterations; ++i)
         {
             process();
+            time_data.ppqPos += (double)BLOCK_SIZE * time_data.tempo / (60. * storage.samplerate);
             memcpy((void *)dL, (void *)(output[0]), BLOCK_SIZE * sizeof(float));
             memcpy((void *)dR, (void *)(output[1]), BLOCK_SIZE * sizeof(float));
 
             dL += BLOCK_SIZE;
             dR += BLOCK_SIZE;
+        }
+    }
+
+    void processMultiBlockWithInput(const py::array_t<float> &in_arr,
+                                    const py::array_t<float> &out_arr, int startBlock = 0,
+                                    int nBlocks = -1)
+    {
+        auto in_buf = in_arr.request();
+        auto out_buf = out_arr.request(true);
+
+        /*
+         * Error condition checks
+         */
+        if (in_buf.itemsize != sizeof(float))
+        {
+            std::ostringstream oss;
+            oss << "Input numpy array must have dtype float; you provided an array with "
+                << in_buf.format << "/" << in_buf.size;
+            throw std::invalid_argument(oss.str().c_str());
+        }
+
+        if (out_buf.itemsize != sizeof(float))
+        {
+            std::ostringstream oss;
+            oss << "Output numpy array must have dtype float; you provided an array with "
+                << out_buf.format << "/" << out_buf.size;
+            throw std::invalid_argument(oss.str().c_str());
+        }
+
+        if (out_buf.ndim != 2)
+        {
+            std::ostringstream oss;
+            oss << "Output numpy array must have 2 dimensions (2, m*BLOCK_SIZE); you provided an "
+                   "array with "
+                << out_buf.ndim << " dimensions";
+            throw std::invalid_argument(oss.str().c_str());
+        }
+
+        if (out_buf.shape[0] != 2 || out_buf.shape[1] % BLOCK_SIZE != 0)
+        {
+            std::ostringstream oss;
+            oss << "Output numpy array must have dimensions (2, m*BLOCK_SIZE); you provided an "
+                   "array with "
+                << out_buf.shape[0] << "x" << out_buf.shape[1];
+            throw std::invalid_argument(oss.str().c_str());
+        }
+
+        if (in_buf.shape != out_buf.shape)
+        {
+            std::ostringstream oss;
+            oss << "Input numpy array dimensions must match output; you provided an "
+                   "array with "
+                << in_buf.shape[0] << "x" << in_buf.shape[1];
+            throw std::invalid_argument(oss.str().c_str());
+        }
+
+        size_t maxBlockStorage = out_buf.shape[1] / BLOCK_SIZE;
+
+        if (startBlock >= maxBlockStorage)
+        {
+            std::ostringstream oss;
+            oss << "Start block of " << startBlock << " is beyond the end of input storage with "
+                << maxBlockStorage << " blocks";
+            throw std::invalid_argument(oss.str().c_str());
+        }
+
+        int blockIterations = maxBlockStorage - startBlock;
+
+        if (nBlocks > 0)
+        {
+            blockIterations = nBlocks;
+        }
+
+        if (startBlock + blockIterations > maxBlockStorage)
+        {
+            std::ostringstream oss;
+            oss << "Start block / nBlock combo " << startBlock << " " << nBlocks
+                << " is beyond the end of input storage with " << maxBlockStorage << " blocks";
+            throw std::invalid_argument(oss.str().c_str());
+        }
+
+        process_input = true;
+
+        auto in_ptr = static_cast<float *>(in_buf.ptr);
+        float *iL = in_ptr + startBlock * BLOCK_SIZE;
+        float *iR = in_ptr + in_buf.shape[1] + startBlock * BLOCK_SIZE;
+        auto out_ptr = static_cast<float *>(out_buf.ptr);
+        float *oL = out_ptr + startBlock * BLOCK_SIZE;
+        float *oR = out_ptr + out_buf.shape[1] + startBlock * BLOCK_SIZE;
+
+        for (auto i = 0; i < blockIterations; ++i)
+        {
+            memcpy((void *)(input[0]), (void *)iL, BLOCK_SIZE * sizeof(float));
+            memcpy((void *)(input[1]), (void *)iR, BLOCK_SIZE * sizeof(float));
+            process();
+            time_data.ppqPos += (double)BLOCK_SIZE * time_data.tempo / (60. * storage.samplerate);
+            memcpy((void *)oL, (void *)(output[0]), BLOCK_SIZE * sizeof(float));
+            memcpy((void *)oR, (void *)(output[1]), BLOCK_SIZE * sizeof(float));
+
+            iL += BLOCK_SIZE;
+            iR += BLOCK_SIZE;
+            oL += BLOCK_SIZE;
+            oR += BLOCK_SIZE;
         }
     }
 
@@ -716,10 +904,10 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
         s.name = txt;
         return s;
     }
+
     py::dict getAllModRoutings()
     {
         auto res = py::dict();
-
         auto sv = [](auto s) {
             auto r = s;
             std::sort(r.begin(), r.end(), [](const auto &a, const auto &b) {
@@ -733,60 +921,73 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
 
         auto gmr = py::list();
         auto t = sv(storage.getPatch().modulation_global);
+
         for (auto gm : t)
         {
             auto r = SurgePyModRouting();
+
             r.source = SurgePyModSource((modsources)gm.source_id);
             r.dest = surgePyNamedParamById(gm.destination_id);
             r.depth = gm.depth;
-            // FIXME 4871
-            r.normalizedDepth = getModulation(gm.destination_id, (modsources)gm.source_id, 0, 0);
+            r.source_scene = gm.source_scene;
+            r.source_index = gm.source_index;
+            r.normalizedDepth = getModDepth01(gm.destination_id, (modsources)gm.source_id,
+                                              gm.source_scene, gm.source_index);
             gmr.append(r);
         }
 
         res["global"] = gmr;
 
         auto scm = py::list();
+
         for (int sc = 0; sc < n_scenes; sc++)
         {
             auto ts = py::dict();
             auto sms = py::list();
             auto st = sv(storage.getPatch().scene[sc].modulation_scene);
+
             for (auto gm : st)
             {
                 auto r = SurgePyModRouting();
+
                 r.source = SurgePyModSource((modsources)gm.source_id);
                 r.dest =
                     surgePyNamedParamById(gm.destination_id + storage.getPatch().scene_start[sc]);
                 r.depth = gm.depth;
-                // FIXME 4871
+                r.source_scene = gm.source_scene;
+                r.source_index = gm.source_index;
                 r.normalizedDepth =
-                    getModulation(gm.destination_id + storage.getPatch().scene_start[sc],
-                                  (modsources)gm.source_id, 0, 0);
+                    getModDepth01(gm.destination_id + storage.getPatch().scene_start[sc],
+                                  (modsources)gm.source_id, r.source_scene, r.source_index);
                 sms.append(r);
             }
+
             ts["scene"] = sms;
 
             auto smv = py::list();
             auto vt = sv(storage.getPatch().scene[sc].modulation_voice);
+
             for (auto gm : vt)
             {
                 auto r = SurgePyModRouting();
+
                 r.source = SurgePyModSource((modsources)gm.source_id);
                 r.dest =
                     surgePyNamedParamById(gm.destination_id + storage.getPatch().scene_start[sc]);
                 r.depth = gm.depth;
-                // FIXME 4871
+                r.source_scene = gm.source_scene;
+                r.source_index = gm.source_index;
                 r.normalizedDepth =
-                    getModulation(gm.destination_id + storage.getPatch().scene_start[sc],
-                                  (modsources)gm.source_id, 0, 0);
+                    getModDepth01(gm.destination_id + storage.getPatch().scene_start[sc],
+                                  (modsources)gm.source_id, gm.source_scene, gm.source_index);
                 smv.append(r);
             }
+
             ts["voice"] = smv;
             scm.append(ts);
         }
+
         res["scene"] = scm;
-        ;
 
         return res;
     }
@@ -802,6 +1003,7 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             throw std::invalid_argument(e.what()); // convert so python sees it
         }
     }
+
     void loadKBMFile(const std::string &s)
     {
         try
@@ -813,9 +1015,26 @@ class SurgeSynthesizerWithPythonExtensions : public SurgeSynthesizer
             throw std::invalid_argument(e.what()); // convert so python sees it
         }
     }
+
     void retuneToStandardTuning() { storage.retuneTo12TETScaleC261Mapping(); }
+
     void remapToStandardKeyboard() { storage.remapToConcertCKeyboard(); }
+
     void retuneToStandardScale() { storage.retuneTo12TETScale(); }
+
+    void setTuningApplicationMode(SurgeStorage::TuningApplicationMode m)
+    {
+        storage.tuningApplicationMode = m;
+    }
+
+    SurgeStorage::TuningApplicationMode getTuningApplicationMode() const
+    {
+        return storage.tuningApplicationMode;
+    }
+
+    void setMPEEnabled(bool m) { storage.mpeEnabled = m; }
+
+    bool getMPEEnabled() const { return storage.mpeEnabled; }
 };
 
 SurgeSynthesizer *createSurge(float sr)
@@ -829,12 +1048,17 @@ SurgeSynthesizer *createSurge(float sr)
     return surge;
 }
 
+// Prefix _ if using shared object within a Python package built with scikit-build
+#ifdef SKBUILD
+PYBIND11_MODULE(_surgepy, m)
+#else
 PYBIND11_MODULE(surgepy, m)
+#endif
 {
-    m.doc() = "Python bindings for Surge Synthesizer";
-    m.def("createSurge", &createSurge, "Create a surge instance", py::arg("sampleRate"));
+    m.doc() = "Python bindings for Surge XT Synthesizer";
+    m.def("createSurge", &createSurge, "Create a Surge XT instance", py::arg("sampleRate"));
     m.def(
-        "getVersion", []() { return Surge::Build::FullVersionStr; }, "Get the version of Surge");
+        "getVersion", []() { return Surge::Build::FullVersionStr; }, "Get the version of Surge XT");
     py::class_<SurgeSynthesizer::ID>(m, "SurgeSynthesizer_ID")
         .def(py::init<>())
         .def("getSynthSideId", &SurgeSynthesizer::ID::getSynthSideId)
@@ -844,7 +1068,7 @@ PYBIND11_MODULE(surgepy, m)
         .def("__repr__",
              [](SurgeSynthesizerWithPythonExtensions &s) {
                  return std::string("<SurgeSynthesizer samplerate=") +
-                        std::to_string((int)samplerate) + "Hz>";
+                        std::to_string((int)s.storage.samplerate) + "Hz>";
              })
         .def("getControlGroup", &SurgeSynthesizerWithPythonExtensions::getControlGroup,
              "Gather the parameters groups for a surge.constants.cg_ control group",
@@ -855,30 +1079,31 @@ PYBIND11_MODULE(surgepy, m)
         .def("getBlockSize", &SurgeSynthesizer::getBlockSize)
         .def("getFactoryDataPath", &SurgeSynthesizerWithPythonExtensions::factoryDataPath)
         .def("getUserDataPath", &SurgeSynthesizerWithPythonExtensions::userDataPath)
-        .def("getSampleRate", [](SurgeSynthesizerWithPythonExtensions &s) { return samplerate; })
+        .def("getSampleRate",
+             [](SurgeSynthesizerWithPythonExtensions &s) { return s.storage.samplerate; })
 
         .def("fromSynthSideId", &SurgeSynthesizer::fromSynthSideId)
         .def("createSynthSideId", &SurgeSynthesizerWithPythonExtensions::createSynthSideId)
 
         .def("getParameterName", &SurgeSynthesizerWithPythonExtensions::getParameterName_py,
-             "Given a parameter, return its name as displayed by the Synth.")
+             "Given a parameter, return its name as displayed by the synth.")
 
         .def("playNote", &SurgeSynthesizerWithPythonExtensions::playNoteWithInts,
-             "Trigger a note on this Surge instance.", py::arg("channel"), py::arg("midiNote"),
+             "Trigger a note on this Surge XT instance.", py::arg("channel"), py::arg("midiNote"),
              py::arg("velocity"), py::arg("detune") = 0)
         .def("releaseNote", &SurgeSynthesizerWithPythonExtensions::releaseNoteWithInts,
-             "Release a note on this Surge instance.", py::arg("channel"), py::arg("midiNote"),
+             "Release a note on this Surge XT instance.", py::arg("channel"), py::arg("midiNote"),
              py::arg("releaseVelocity") = 0)
         .def("pitchBend", &SurgeSynthesizerWithPythonExtensions::pitchBendWithInts,
              "Set the pitch bend value on channel ch", py::arg("channel"), py::arg("bend"))
         .def("allNotesOff", &SurgeSynthesizer::allNotesOff, "Turn off all playing notes")
         .def("polyAftertouch", &SurgeSynthesizerWithPythonExtensions::polyAftertouchWithInts,
-             "Send the poly aftertouch midi message", py::arg("channel"), py::arg("key"),
+             "Send the poly aftertouch MIDI message", py::arg("channel"), py::arg("key"),
              py::arg("value"))
         .def("channelAftertouch", &SurgeSynthesizerWithPythonExtensions::channelAftertouchWithInts,
-             "Send the channel aftertouch midi message", py::arg("channel"), py::arg("value"))
+             "Send the channel aftertouch MIDI message", py::arg("channel"), py::arg("value"))
         .def("channelController", &SurgeSynthesizerWithPythonExtensions::channelControllerWithInts,
-             "Set midi controller on channel to value", py::arg("channel"), py::arg("cc"),
+             "Set MIDI controller on channel to value", py::arg("channel"), py::arg("cc"),
              py::arg("value"))
 
         .def("getParamMin", &SurgeSynthesizerWithPythonExtensions::getParamMin,
@@ -888,9 +1113,9 @@ PYBIND11_MODULE(surgepy, m)
         .def("getParamDef", &SurgeSynthesizerWithPythonExtensions::getParamDef,
              "Parameter default value, as a float")
         .def("getParamVal", &SurgeSynthesizerWithPythonExtensions::getParamVal,
-             "Parameter current value in this Surge instance, as a float")
+             "Parameter current value in this Surge XT instance, as a float")
         .def("getParamValType", &SurgeSynthesizerWithPythonExtensions::getParamValType,
-             "Parameter type. float, int or bool are supported")
+             "Parameter types float, int or bool are supported")
 
         .def("getParamDisplay", &SurgeSynthesizerWithPythonExtensions::getParamDisplay,
              "Parameter value display (stringified and formatted)")
@@ -901,48 +1126,63 @@ PYBIND11_MODULE(surgepy, m)
              "Set a parameter value", py::arg("param"), py::arg("toThis"))
 
         .def("loadPatch", &SurgeSynthesizerWithPythonExtensions::loadPatchPy,
-             "Load a Surge .fxp patch from the file system.", py::arg("path"))
+             "Load a Surge XT .fxp patch from the file system.", py::arg("path"))
         .def("savePatch", &SurgeSynthesizerWithPythonExtensions::savePatchPy,
-             "Save the current state of Surge to an .fxp file.", py::arg("path"))
+             "Save the current state of Surge XT to an .fxp file.", py::arg("path"))
+
+        .def("loadWavetable", &SurgeSynthesizerWithPythonExtensions::loadWavetablePy,
+             "Load a wavetable file directly into a scene and oscillator immediately on this "
+             "thread.",
+             py::arg("scene"), py::arg("osc"), py::arg("path"))
 
         .def("getModSource", &SurgeSynthesizerWithPythonExtensions::getModSource,
-             "Given a constant from surge.constants.ms_* provide a modulator object",
+             "Given a constant from surge.constants.ms_*, provide a modulator object",
              py::arg("modId"))
-        .def("setModulation", &SurgeSynthesizerWithPythonExtensions::setModulationPy,
+        .def("setModDepth01", &SurgeSynthesizerWithPythonExtensions::setModulationPy,
              "Set a modulation to a given depth", py::arg("targetParameter"),
-             py::arg("modulationSource"), py::arg("depth"))
-        .def("getModulation", &SurgeSynthesizerWithPythonExtensions::getModulationPy,
+             py::arg("modulationSource"), py::arg("depth"), py::arg("scene") = 0,
+             py::arg("index") = 0)
+        .def("getModDepth01", &SurgeSynthesizerWithPythonExtensions::getModulationPy,
              "Get the modulation depth from a source to a parameter.", py::arg("targetParameter"),
-             py::arg("modulationSource"))
+             py::arg("modulationSource"), py::arg("scene") = 0, py::arg("index") = 0)
         .def("isValidModulation", &SurgeSynthesizerWithPythonExtensions::isValidModulationPy,
              "Is it possible to modulate between target and source?", py::arg("targetParameter"),
              py::arg("modulationSource"))
         .def("isActiveModulation", &SurgeSynthesizerWithPythonExtensions::isActiveModulationPy,
              "Is there an established modulation between target and source?",
-             py::arg("targetParameter"), py::arg("modulationSource"))
+             py::arg("targetParameter"), py::arg("modulationSource"), py::arg("scene") = 0,
+             py::arg("index") = 0)
         .def("isBipolarModulation", &SurgeSynthesizerWithPythonExtensions::isBipolarModulationPy,
              "Is the given modulation source bipolar?", py::arg("modulationSource"))
 
         .def("getAllModRoutings", &SurgeSynthesizerWithPythonExtensions::getAllModRoutings,
-             "Get the entire modulation matrix for this instance")
+             "Get the entire modulation matrix for this instance.")
 
         .def("process", &SurgeSynthesizer::process,
-             "Run surge for one block and update the internal output buffer.")
+             "Run Surge XT for one block and update the internal output buffer.")
         .def("getOutput", &SurgeSynthesizerWithPythonExtensions::getOutput,
-             "Retrieve the internal output buffer as a 2xBLOCK_SIZE numpy array.")
+             "Retrieve the internal output buffer as a 2 * BLOCK_SIZE numpy array.")
 
         .def("createMultiBlock", &SurgeSynthesizerWithPythonExtensions::createMultiBlock,
-             "Create a numpy array suitable to hold up to b blocks of Surge processing in "
+             "Create a numpy array suitable to hold up to b blocks of Surge XT processing in "
              "processMultiBlock",
              py::arg("blockCapacity"))
         .def("processMultiBlock", &SurgeSynthesizerWithPythonExtensions::processMultiBlock,
-             "Run the surge engine for multiple blocks, updating the value in the numpy array. "
+             "Run the Surge XT engine for multiple blocks, updating the value in the numpy array. "
              "Either populate the\n"
              "entire array, or starting at startBlock position in the output, populate nBlocks.",
              py::arg("val"), py::arg("startBlock") = 0, py::arg("nBlocks") = -1)
+        .def("processMultiBlockWithInput",
+             &SurgeSynthesizerWithPythonExtensions::processMultiBlockWithInput,
+             "Run the Surge XT engine for multiple blocks using the input numpy array, "
+             "updating the value in the output numpy array. "
+             "Either populate the\n"
+             "entire array, or starting at startBlock position in the output, populate nBlocks.",
+             py::arg("inVal"), py::arg("outVal"), py::arg("startBlock") = 0,
+             py::arg("nBlocks") = -1)
 
         .def("getPatch", &SurgeSynthesizerWithPythonExtensions::getPatchAsPy,
-             "Get a python dictionary with the Surge parameters laid out in the logical patch "
+             "Get a Python dictionary with the Surge XT parameters laid out in the logical patch "
              "format")
 
         .def("loadSCLFile", &SurgeSynthesizerWithPythonExtensions::loadSCLFile,
@@ -953,10 +1193,15 @@ PYBIND11_MODULE(surgepy, m)
         .def("retuneToStandardScale", &SurgeSynthesizerWithPythonExtensions::retuneToStandardScale,
              "Return this instance to 12-TET Scale")
         .def("loadKBMFile", &SurgeSynthesizerWithPythonExtensions::loadKBMFile,
-             "Load an KBM mapping file and apply tuning to this instance")
+             "Load a KBM mapping file and apply tuning to this instance")
         .def("remapToStandardKeyboard",
              &SurgeSynthesizerWithPythonExtensions::remapToStandardKeyboard,
-             "Return to standard C centered keyboard mapping");
+             "Return to standard C-centered keyboard mapping")
+        .def_property("mpeEnabled", &SurgeSynthesizerWithPythonExtensions::getMPEEnabled,
+                      &SurgeSynthesizerWithPythonExtensions::setMPEEnabled)
+        .def_property("tuningApplicationMode",
+                      &SurgeSynthesizerWithPythonExtensions::getTuningApplicationMode,
+                      &SurgeSynthesizerWithPythonExtensions::setTuningApplicationMode);
 
     py::class_<SurgePyControlGroup>(m, "SurgeControlGroup")
         .def("getId", &SurgePyControlGroup::getControlGroupId)
@@ -983,6 +1228,8 @@ PYBIND11_MODULE(surgepy, m)
     py::class_<SurgePyModRouting>(m, "SurgeModRouting")
         .def("getSource", [](const SurgePyModRouting &r) { return r.source; })
         .def("getDest", [](const SurgePyModRouting &r) { return r.dest; })
+        .def("getSourceScene", [](const SurgePyModRouting &r) { return r.source_scene; })
+        .def("getSourceIndex", [](const SurgePyModRouting &r) { return r.source_index; })
         .def("getDepth", [](const SurgePyModRouting &r) { return r.depth; })
         .def("getNormalizedDepth", [](const SurgePyModRouting &r) { return r.normalizedDepth; })
         .def("__repr__", [](const SurgePyModRouting &r) {
@@ -992,7 +1239,8 @@ PYBIND11_MODULE(surgepy, m)
             return oss.str();
         });
 
-    py::module m_const = m.def_submodule("constants", "Constants which are used to navigate Surge");
+    py::module m_const =
+        m.def_submodule("constants", "Constants which are used to navigate Surge XT");
 
 #define C(x) m_const.attr(#x) = py::int_((int)(x));
     C(cg_GLOBAL);
@@ -1118,12 +1366,15 @@ PYBIND11_MODULE(surgepy, m)
     C(lt_mseg);
     C(lt_formula);
 
-    C(wst_none);
-    C(wst_soft);
-    C(wst_hard);
-    C(wst_asym);
-    C(wst_sine);
-    C(wst_digital);
+    {
+        using sst::waveshapers::WaveshaperType;
+        C(WaveshaperType::wst_none);
+        C(WaveshaperType::wst_soft);
+        C(WaveshaperType::wst_hard);
+        C(WaveshaperType::wst_asym);
+        C(WaveshaperType::wst_sine);
+        C(WaveshaperType::wst_digital);
+    }
 
     {
         using sst::filters::FilterType;
@@ -1162,4 +1413,8 @@ PYBIND11_MODULE(surgepy, m)
         C(FilterType::fut_resonancewarp_ap);
         C(FilterType::fut_tripole);
     }
+
+    py::enum_<SurgeStorage::TuningApplicationMode>(m, "TuningApplicationMode")
+        .value("RETUNE_ALL", SurgeStorage::TuningApplicationMode::RETUNE_ALL)
+        .value("RETUNE_MIDI_ONLY", SurgeStorage::TuningApplicationMode::RETUNE_MIDI_ONLY);
 }

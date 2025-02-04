@@ -1,36 +1,31 @@
 # Surge XT
 
-**If you are a musician looking to use Surge, please download the appropriate binary
+**If you are a musician looking to use Surge XT, please download the appropriate binary
 [from our website](https://surge-synthesizer.github.io). Surge Synth Team makes regular releases for all supported
 platforms.**
-
-**Over 2021, after the successful release of Surge 1.9, the Surge Synth team undertook an effort to rebuild Surge in JUCE
-and add a variety of features. This project resulted in the new version of Surge, called 'Surge XT'. The head of this
-repo contains the current version of Surge XT. If you are looking to compile a stable production version of Surge, we
-tag each release, so if you want to compile Surge 1.9, please check out the `release_1.9.0` tag.**
 
 CI: [![CI Build Status](https://dev.azure.com/surge-synthesizer/surge/_apis/build/status/surge-synthesizer.surge?branchName=main)](https://dev.azure.com/surge-synthesizer/surge/_build/latest?definitionId=2&branchName=main)
 Release: [![Release Build Status](https://dev.azure.com/surge-synthesizer/surge/_apis/build/status/surge-synthesizer.releases?branchName=master)](https://dev.azure.com/surge-synthesizer/surge/_build/latest?definitionId=1&branchName=master)
 Release-XT: [![Release-XT Build Status](https://dev.azure.com/surge-synthesizer/surge/_apis/build/status/surge-synthesizer.releases-xt?branchName=master)](https://dev.azure.com/surge-synthesizer/surge/_build/latest?definitionId=13&branchName=master)
 
-Surge is a free and open-source hybrid synthesizer, originally written and sold as a commercial product by @kurasu/Claes
+Surge XT is a free and open-source hybrid synthesizer, originally written and sold as a commercial product by @kurasu/Claes
 Johanson at [Vember Audio](http://vemberaudio.se). In September 2018, Claes decided to release a partially completed
 version of Surge 1.6 under GPL3, and a group of developers have been improving it since. You can learn more about the
 team at https://surge-synth-team.org/ or connect with us
-on [Discord](https://raw.githubusercontent.com/surge-synthesizer/surge-synthesizer.github.io/master/_includes/discord_invite_link)
+on [Discord](https://raw.githubusercontent.com/surge-synthesizer/surge-synthesizer.github.io/master/src/assets/includes/discord_invite_link)
 .
 
-If you would also like to participate in discussions, testing and design of Surge, we have details below and also in
-the [contributors section of the Surge website](https://surge-synthesizer.github.io/#contributors).
+If you would also like to participate in discussions, testing and design of Surge XT, we have details below and also in
+the [contributors section of the Surge XT website](https://surge-synthesizer.github.io/#contributors).
 
-This readme serves as the root of developer documentation for Surge.
+This readme serves as the root of developer documentation for Surge XT.
 
 # Developing Surge XT
 
 We welcome developers! Our workflow revolves around GitHub issues in this repository and conversations at our Discord
 server. You can read our developer guidelines
 in [our developer guide document](doc/Developer%20Guide.md). If you want to contribute and are new to Git, we also have
-a [Git How To](doc/How%20to%20Git.md), tailored at Surge development.
+a [Git How To](doc/How%20to%20Git.md), tailored at Surge XT development.
 
 The developer guide also contains information about testing and debugging in particular hosts on particular platforms.
 
@@ -41,8 +36,8 @@ a development environment set up, you almost definitely have what you need, but 
 - [Setting up Build Environment on macOS](#macos)
 - [Setting up Build Environment on Linux](#linux)
 
-Once you have set your environment up, you need to checkout the Surge code with Git, grab submodules, run CMake to
-configure, then run CMake to build. Your IDE may support CMake (more on that below), but a reliable way to build Surge
+Once you have set your environment up, you need to checkout the Surge XT code with Git, grab submodules, run CMake to
+configure, then run CMake to build. Your IDE may support CMake (more on that below), but a reliable way to build Surge XT
 on all platforms is:
 
 ```
@@ -53,7 +48,7 @@ cmake -Bbuild
 cmake --build build --config Release --target surge-staged-assets
 ```
 
-This will build all the Surge binary assets in the directory `build/surge_xt_products` and is often enough of a formula
+This will build all the Surge XT binary assets in the directory `build/surge_xt_products` and is often enough of a formula
 to do a build.
 
 ## Developing from your own fork
@@ -74,13 +69,13 @@ When you run the first CMake step, CMake will generate IDE-compatible files for 
 Studio files. On Mac it will generate makefiles by default, but if you add the argument `-GXcode` you can get an XCode
 project if you want.
 
-Surge developers regularly develop with all sorts of tools. CLion, Visual Studio, vim, emacs, VS Code, and many others
+Surge XT developers regularly develop with all sorts of tools. CLion, Visual Studio, vim, emacs, VS Code, and many others
 can work properly with the software.
 
 ## Building a VST2
 
-Due to licensing restrictions, VST2 builds of Surge **may not** be redistributed. However, it is possible to build a
-VST2 of Surge for your own personal use. First, obtain a local copy of the VST2 SDK, and unzip it to a folder of your
+Due to licensing restrictions, VST2 builds of Surge XT **may not** be redistributed. However, it is possible to build a
+VST2 of Surge XT for your own personal use. First, obtain a local copy of the VST2 SDK, and unzip it to a folder of your
 choice. Then set `VST2SDK_DIR` to point to that folder:
 
 ```
@@ -93,7 +88,7 @@ or, in the Windows command prompt:
 set VST2SDK_DIR=c:\path\to\VST2SDK
 ```
 
-Finally, run CMake afresh, and build the VST2 targets:
+Finally, run CMake afresh and build the VST2 targets:
 
 ```
 cmake -Bbuild_vst2
@@ -107,11 +102,11 @@ process by modifying the value of `--parallel` argument.
 
 ## Building with support for ASIO
 
-On Windows, building with ASIO is often preferred for Surge standalone, since it enables users to use the ASIO
+On Windows, building with ASIO is often preferred for Surge XT standalone, since it enables users to use the ASIO
 low-latency audio driver.
 
-Unfortunately, due to licensing conflicts, binaries of Surge that are built with ASIO **may not** be redistributed.
-However, you can build Surge with ASIO for your own personal use, provided you do not redistribute those builds.
+Unfortunately, due to licensing conflicts, binaries of Surge XT that are built with ASIO **may not** be redistributed.
+However, you can build Surge XT with ASIO for your own personal use, provided you do not redistribute those builds.
 
 If you already have a copy of the ASIO SDK, simply set the following environment variable and you're good to go!
 
@@ -128,27 +123,66 @@ cmake -Bbuild -DBUILD_USING_MY_ASIO_LICENSE=True
 
 ## Building an LV2
 
-On Linux, using a community fork of JUCE, you can build an LV2. Here's how! We assume you have checked out Surge and can
-build.
+Surge XT 1.3 family moves to JUCE 7, which includes support for LV2 builds. For a variety of reasons
+we don't build LV2 either by default or in our CI pipeline. You can activate the LV2 build in your
+environment by adding `-DSURGE_BUILD_LV2=TRUE` on your initial CMake build.
 
-First, clone https://github.com/lv2-porting-project/JUCE/tree/lv2 on branch lv2, to some directory of your choosing.
+## Building and Using the Python Bindings
+
+Surge XT uses `pybind` to expose the innards of the synth to Python code for direct
+native access to all its features. This is a tool mostly useful for developers,
+and the [surge-python](https://github.com/surge-synthesizer/surge-python) 
+repository shows some uses.
+
+To use Surge XT in this manner, you need to build the Python extension. Here's
+how (this shows the result on Mac, but Windows and Linux are similar).
+
+First, configure a build with Python bindings activated:
 
 ```
-sudo apt-get install -y lv2-dev
-cd /some/location
-git clone --branch lv2 https://github.com/lv2-porting-project/JUCE JUCE-lv2
+cmake -Bignore/bpy -DSURGE_BUILD_PYTHON_BINDINGS=ON -DCMAKE_BUILD_TYPE=Release
 ```
 
-then run a fresh CMake to (1) point to that JUCE fork and (2) activate LV2
+Note the directory `ignore/bpy` could be anything you want. The `ignore`
+directory is handy, since it is ignored via `.gitignore`.
+
+Then build the Python plugin:
 
 ```
-cmake -Bbuild_lv2 -DCMAKE_BUILD_TYPE=Release -DJUCE_SUPPORTS_LV2=True -DSURGE_JUCE_PATH=/some/location/JUCE-lv2/
-cmake --build build_lv2 --config Release --target surge-xt_LV2 --parallel 4
-cmake --build build_lv2 --config Release --target surge-fx_LV2 --parallel 4
+cmake --build ignore/bpy --parallel --target surgepy
 ```
 
-You will then have LV2s in `build_lv2/src/surge-xt/surge-xt_artefacts/Release/LV2`
-and  `build_lv2/src/surge-xt/surge-fx_artefacts/Release/LV2` respectively.
+which should result in the Python .dll being present:
+
+```bash
+% ls ignore/bpy/src/surge-python/*so
+ignore/bpy/src/surge-python/surgepy.cpython-311-darwin.so
+```
+
+on Windows, look for the `.pyd` file instead:
+
+```bash
+ls ignore/bpy/src/surge-python/Debug/*pyd
+```
+
+and you should see a file like `surgepy.cp312-win_amd64.pyd`
+
+Now you can finally start Python to load that. Here is an example interactive
+session, but it will work similarly in the tool of your choosing:
+
+```bash
+% python3
+Python 3.11.4 (main, Jun 20 2023, 17:37:48) [Clang 14.0.0 (clang-1400.0.29.202)] on darwin
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import sys
+>>> sys.path.append("ignore/bpy/src/surge-python")
+>>> import surgepy
+>>> surgepy.getVersion()
+'1.3.main.850bd53b'
+>>> quit()
+```
+
+on Windows, run `sys.path.append("ignore/bpy/src/surge-python/Debug")` instead, as the path is slightly different.
 
 ## Building an Installer
 
@@ -158,7 +192,7 @@ InnoSetup, so you will need the [nuget.exe CLI](https://nuget.org/) in your path
 
 ## Using CMake on the Command Line for More
 
-We have a variety of other CMake options and targets which can allow you to develop and install Surge more easily.
+We have a variety of other CMake options and targets which can allow you to develop and install Surge XT more easily.
 
 ### Plugin Development
 
@@ -179,7 +213,7 @@ cmake --build ignore/sxt --config Release --parallel 8
 sudo cmake --install ignore/sxt
 ```
 
-and you should get a working install in `/usr/bin`, `/usr/share` and `/usr/lib`
+and you should get a working install in `/usr/bin`, `/usr/share` and `/usr/lib`.
 
 ## Platform Specific Choices
 
@@ -192,7 +226,7 @@ If you are building with Visual Studio 2019, use the `-A` flag in your CMake com
 cmake -Bbuild -G"Visual Studio 16 2019" -A x64
 
 # 32-bit
-cmake -Bbuild -G"Visual Studio 16 2019" -A Win32
+cmake -Bbuild32 -G"Visual Studio 16 2019" -A Win32
 ```
 
 If you are using an older version of Visual Studio, you must specify your preference with your choice of CMake generator:
@@ -202,7 +236,7 @@ If you are using an older version of Visual Studio, you must specify your prefer
 cmake -Bbuild -G"Visual Studio 15 2017 Win64"
 
 # 32-bit
-cmake -Bbuild -G"Visual Studio 15 2017"
+cmake -Bbuild32 -G"Visual Studio 15 2017"
 ```
 
 ### Building a Mac Fat Binary (ARM/Intel)
@@ -215,12 +249,33 @@ To build a fat binary on a Mac, simply add the following CMake argument to your 
 
 ### Building for Raspberry Pi
 
-To build for a Raspberry Pi, you want to add the `LINUX_ON_ARM` CMake variable when you first run CMake. Otherwise, the
-commands are unchanged. So, on a Pi, you can do:
+Surge XT builds natively on 64-bit Raspberry Pi operating systems. Install your compiler
+toolchain and run the standard CMake commands. Surge XT will *not* build on 32-bit Raspberry Pi
+systems, giving an error in Spring Reverb and elsewhere in DSP code. If you would like to work
+on fixing this, see the comment in CMakeLists.txt or drop us a line on our Discord or GitHub.
+
+As of June 2023, though, gcc in some distributions has an apparent bug which generates a
+specious warning which we promote to an error. We found Surge XT compiles cleanly with
+`gcc (Debian 10.2.1-6) 10.2.1 20210110`, but not with others.
+Surge XT also compiles with Clang 11. The error in question takes the form:
 
 ```
-cmake -Bbuild -DLINUX_ON_ARM=True
-cmake --build build --config Release --target surge-staged-assets
+/home/pi/Documents/github/surge/libs/sst/sst-filters/include/sst/filters/QuadFilterUnit_Impl.h:539:26: error: requested alignment 16 is larger than 8 [-Werror=attributes]
+     int DTi alignas(16)[4], SEi alignas(16)[4];
+```
+
+If you get that error and are working on RPi, your options are:
+
+1. Change to a gcc version which doesn't mis-tag that as an error
+2. Use Clang instead of gcc, as detailed below
+3. Figure out how to suppress that error in CMake just for gcc on Raspberry Pi and send us a pull request
+
+To build with Clang:
+
+```bash
+sudo apt install clang
+cmake -Bignore/s13clang -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build ignore/s13clang --target surge-xt_Standalone --parallel 3
 ```
 
 ### Cross-compiling for aarch64
@@ -229,7 +284,7 @@ To cross-compile for aarch64, use the CMake Linux toolchain for aarch64, as show
 
 ```
 cmake -Bignore/xc64 -DCMAKE_TOOLCHAIN_FILE=cmake/linux-aarch64-ubuntu-crosscompile-toolchain.cmake -DCMAKE_BUILD_TYPE=DEBUG -GNinja
-cmake --build ignore/xc64 --config Debug --target surge-headless
+cmake --build ignore/xc64 --config Debug --target surge-testrunner
 ```
 
 Of course, that toolchain makes specific choices. You can make other choices as long as (1) you set the CMake variable
@@ -237,16 +292,21 @@ Of course, that toolchain makes specific choices. You can make other choices as 
 
 ### Cross-compiling for macOS
 
-Surge cross-compiles to macOS Intel from Linux and BSD.
+Surge XT cross-compiles to macOS Intel from Linux and BSD.
 
 1. Install [osxcross](https://github.com/tpoechtrager/osxcross). Make sure to also install the `libclang_rt` library
    built by their `build_compiler_rt.sh` script.
-2. Configure and build Surge:
+2. Configure and build Surge XT:
 
 ```
 cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-apple-darwin20.4-clang.cmake -DCMAKE_FIND_ROOT_PATH=<path_to_osxcross_sdk> -Bbuild
 cmake --build build
 ```
+
+### Building older versions
+
+Each version of Surge from 1.6 beta 6 or so has a branch in this repository. Just check it out and
+read the associated README.
 
 # Setting up for Your OS
 
@@ -258,7 +318,7 @@ You need to install the following:
 * Install [Git](https://git-scm.com/downloads)
   , [Visual Studio 2017 or newer](https://visualstudio.microsoft.com/downloads/)
 * When you install Visual Studio, make sure to include CLI tools and CMake, which are included in
-  'Optional CLI support' and 'Toolset for desktop' install bundles
+  'Optional CLI support' and 'Toolset for desktop' install bundles.
 
 ## macOS
 
@@ -284,18 +344,18 @@ older than 7 or so and clangs after 9 or 10. You will also need to install a set
 sudo apt install build-essential libcairo-dev libxkbcommon-x11-dev libxkbcommon-dev libxcb-cursor-dev libxcb-keysyms1-dev libxcb-util-dev libxrandr-dev libxinerama-dev libxcursor-dev libasound2-dev libjack-jackd2-dev
 ```
 
-*You can find more info about Surge on Linux and other Unix-like distros in* [this wiki article](https://github.com/surge-synthesizer/surge-synthesizer.github.io/wiki/Surge-on-various-unix-like-distributions).
+*You can find more info about Surge XT on Linux and other Unix-like distros in* [this document](doc/Linux-and-other-Unix-like-distributions.md).
 
 # Continuous Integration
 
 In addition to the build commands above, we use Azure pipelines for continuous integration. This means that each and
-every pull request will be automatically built across all our environments, and a clean build on all platforms is an obvious
+every pull request will be automatically built across all our environment,and a clean build on all platforms is an obvious
 pre-requisite. If you have questions about our CI tools, don't hesitate to ask on
-our [Discord](https://raw.githubusercontent.com/surge-synthesizer/surge-synthesizer.github.io/master/_includes/discord_invite_link)
+our [Discord](https://raw.githubusercontent.com/surge-synthesizer/surge-synthesizer.github.io/master/src/assets/includes/discord_invite_link)
 server. We are grateful to Microsoft for providing Azure pipelines for free to the open-source community!
 
 # References
 
-* Most Surge-related conversation happens on the Surge Synthesizer Discord server. You can join
-  via [this link](https://raw.githubusercontent.com/surge-synthesizer/surge-synthesizer.github.io/master/_includes/discord_invite_link)
-* Discussion at KvR forum [here](https://www.kvraudio.com/forum/viewtopic.php?f=1&t=511922)
+* Most Surge XT-related conversation happens on the Surge Synthesizer Discord server. You can join
+  via [this link](https://raw.githubusercontent.com/surge-synthesizer/surge-synthesizer.github.io/master/_includes/discord_invite_link).
+* Discussion at KvR forum [here](https://www.kvraudio.com/forum/viewtopic.php?f=1&t=511922).
